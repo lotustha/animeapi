@@ -1,5 +1,5 @@
 {
-  "name": "Cooren",
+  "name": "mugen",
   "module": "src/index.ts",
   "type": "module",
   "private": true,

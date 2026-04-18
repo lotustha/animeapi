@@ -1,4 +1,4 @@
-# Cooren API
+# Mugen
 
 [![Bun](https://img.shields.io/badge/Bun-%23000000.svg?style=for-the-badge&logo=bun&logoColor=white)](https://bun.sh)
 [![Node.js](https://img.shields.io/badge/Node.js-339933.svg?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org)
@@ -7,40 +7,31 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC.svg?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)](LICENSE)
 
-
-Cooren is an open-source, high-performance, and scalable scraping engine designed to collect, organize, and deliver structured data from across the world of anime, movies, manga, and music.
-
-Developed and maintained by [CoorenLabs](https://coorenlabs.com).
+**Mugen** is a high-performance, developer-focused media scraping engine. Engineered for scalability and speed, it provides a unified ecosystem for aggregating, structuring, and serving media data across various domains, including Anime, Manga, Movies, TV Shows, and Music. 
 
 ---
 
-## Quick Links
+## Technical Overview
 
-- [Website](https://coorenlabs.com)
-- [Documentation](https://docs.coorenlabs.com)
-- [GitHub](https://github.com/CoorenLabs/CoorenLabs)
+Mugen leverages a modern JavaScript runtime environment to deliver exceptional performance and low latency. It is architected to be modular, making it easy to extend and maintain across diverse scraping providers.
 
----
-
-## Features
-
-- **Multi-Runtime Compliance**: Full support for Bun, Node.js, and Deno.
-- **Unified Media Ecosystem**: Anime, Manga, Movies, TV, and Music.
-- **High Performance**: Native speed powered by Bun and ElysiaJS.
-- **Mock-Based Testing**: Comprehensive dual-framework (Vitest/Jest) integration tests.
-- **Developer Friendly**: TypeScript and modular, test-ready architecture.
-
+### Key Features
+- **Multi-Runtime Compatibility**: Engineered to run seamlessly across Bun, Node.js, and Deno environments.
+- **Unified Media Aggregation**: A single, cohesive API capable of handling multiple media types simultaneously.
+- **Native Execution Speed**: Powered by the Bun runtime and the ElysiaJS framework for unparalleled throughput.
+- **Robust Testing Infrastructure**: Features comprehensive integration testing utilizing both Vitest and Jest, complete with advanced mock implementations.
+- **Developer-Centric Design**: Written entirely in TypeScript, emphasizing type safety, modular design, and robust developer ergonomics.
 
 ---
 
-## Tech Stack
+## Technology Stack
 
-- **Runtime**: Bun
-- **Framework**: ElysiaJS
+- **Primary Runtime**: [Bun](https://bun.sh)
+- **Web Framework**: [ElysiaJS](https://elysiajs.com)
 - **Language**: TypeScript
-- **Scraping**: Cheerio, Puppeteer
-- **Database/Cache**: Upstash Redis
-- **Validation**: Zod
+- **Data Parsing & Scraping**: Cheerio, Puppeteer
+- **Caching & Storage**: Upstash Redis
+- **Schema Validation**: Zod
 
 ---
 
@@ -48,41 +39,51 @@ Developed and maintained by [CoorenLabs](https://coorenlabs.com).
 
 ### Prerequisites
 
-Install [Bun](https://bun.sh).
+Before running the project locally, ensure you have [Bun](https://bun.sh) installed on your system.
 
 ### Installation
 
+Clone the repository and install the required dependencies:
+
 ```bash
-git clone https://github.com/CoorenLabs/CoorenLabs.git
-cd CoorenLabs
+git clone https://github.com/lotustha/animeapi.git
+cd animeapi
 bun install
 ```
 
-### Running the Server
+### Running the Development Server
+
+To launch the API in a local development environment:
 
 ```bash
-bun run dev      # or bun run hot
+bun run dev
 ```
 
-### Build for Production
+*Alternatively, you can utilize hot-reloading with `bun run hot`.*
+
+### Building for Production
+
+Mugen offers dedicated build pipelines tailored to your deployment environment:
 
 ```bash
-bun run build:bun   # Optimized for Bun
-bun run build:node  # Compile to Node
+bun run build:bun   # Highly optimized bundle for the Bun runtime
+bun run build:node  # Standard ES compilation for Node.js environments
 ```
 
 ---
 
-## Creating a New Provider
+## Extending the Engine
 
-```
-src/providers/<name>/
+Mugen is built to be easily extensible. To create a new data provider, structure your module using the following convention within the `src/providers` directory:
+
+```text
+src/providers/<namespace>/
 ├── route.ts
 ├── <name>.ts
 └── types.ts
 ```
 
-### Example: route.ts
+### Route Registration Example (`route.ts`)
 
 ```ts
 import Elysia from "elysia";
@@ -95,11 +96,18 @@ export const flixhqRoutes = new Elysia({ prefix: "/flixhq" })
 
 ---
 
-## Testing & Linting
+## Development & Maintenance
+
+Maintain code quality by utilizing the built-in testing and linting pipelines:
 
 ```bash
+# Execute the test suite
 bun run test
+
+# Run ESLint compliance checks
 bun run lint
+
+# Automatically resolve fixable linting issues
 bun run lint:fix
 ```
 
@@ -107,6 +115,4 @@ bun run lint:fix
 
 ## License
 
-This project is licensed under the [GPL-3.0 License](LICENSE).
-
----
+This software is distributed under the [GPL-3.0 License](LICENSE). For more information, please see the `LICENSE` file in the project repository.

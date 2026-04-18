@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "buildCommand": "bun run build:node",
+  "installCommand": "bun install",
+  "builds": [
+    {
+      "src": "dist/src/index.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production",
+    "CUSTOM_DOMAIN": "vercel.app"
+  }
+}

@@ -25,9 +25,6 @@
     ]
   },
   "include": [
-    "src/**/*",
-    "scripts/**/*",
-    "tests/**/*",
-    "old/cf-bypass-old-buggy.ts"
+    "src/**/*"
   ]
 }

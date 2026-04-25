@@ -1,4 +1,4 @@
-export const animepahe = "https://animepahe.com";
+export const animepahe = "https://animepahe.pw";
 export const animekai = "https://anikai.to";
 export const toonstream = "https://toonstream.dad";
 export const animesalt = "https://animesalt.ac";

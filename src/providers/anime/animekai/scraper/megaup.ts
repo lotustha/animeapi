@@ -57,6 +57,7 @@ export class MegaUp {
   static async extract(videoUrl: string): Promise<any> {
     try {
       const url = videoUrl.replace("/e/", "/media/");
+
       const res = await fetch(url, {
         headers: {
           Connection: "keep-alive",
@@ -65,7 +66,7 @@ export class MegaUp {
       });
       const data = await res.json();
       const decrypted = await this.decode(data.result);
-
+      console.log(JSON.stringify(decrypted) + " decrypted");
       return {
         sources: decrypted.sources.map((s: any) => ({
           url: s.file,

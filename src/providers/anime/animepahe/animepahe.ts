@@ -304,7 +304,7 @@ export class Animepahe {
 
   private static async extractDirect(kwikLink: string): Promise<string> {
     const res = await fetch(kwikLink, {
-      headers: { Referer: "https://animepahe.com", "User-Agent": USER_AGENT },
+      headers: { Referer: "https://animepahe.pw", "User-Agent": USER_AGENT },
     });
     const body = await res.text();
     const $ = cheerio.load(body);
@@ -332,7 +332,7 @@ export class Animepahe {
   private static async extractHls(paheWinLink: string, originalRes: Response): Promise<string> {
     const kwikHeadersRes = await fetch(`${paheWinLink}/i`, {
       redirect: "manual",
-      headers: { Referer: "https://animepahe.com" },
+      headers: { Referer: "https://animepahe.pw" },
     });
 
     const kwikLocation = getMapValue(

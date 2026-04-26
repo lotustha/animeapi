@@ -50,7 +50,7 @@ export async function ScrapeSeriesInfo(url: string) {
   // if (url.startsWith("http") && !url.startsWith(TOONSTREAM_BASE)) return; // avoid urls other than toonstream's
 
   // const decodedURL = url.startsWith("http") ? decodeURIComponent(url) : `${TOONSTREAM_BASE}/series/${url}`; // url or slug
-  const decodedURL = `${TOONSTREAM_BASE}/series/${url}/`; // slug only
+  const decodedURL = `${TOONSTREAM_BASE}/series/info/${url}/`; // slug only
   console.log("Fetching", decodedURL);
 
   try {
@@ -170,7 +170,7 @@ async function getSeasonsByPostId(postId: string, start_season: number, end_seas
   for (let i = start_season; i <= end_season; i++) {
     const episodes: Episode[] = [];
 
-    const res = await fetch(TOONSTREAM_BASE + "/home/wp-admin/admin-ajax.php", {
+    const res = await fetch(TOONSTREAM_BASE + "/wp-admin/admin-ajax.php", {
       headers: {
         accept: "*/*",
         "accept-language": "en-US,en;q=0.9,hi;q=0.8,bn;q=0.7",

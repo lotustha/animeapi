@@ -608,7 +608,7 @@ export class AnimeKai {
           ).json();
 
           const decoded = await MegaUp.decodeIframeData(viewData.result);
-          console.log(JSON.stringify(decoded) + " decoded");
+          
           const videoSources = await MegaUp.extract(decoded.url);
 
           // Set skip times from the first parsed server

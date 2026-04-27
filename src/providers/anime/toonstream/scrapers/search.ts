@@ -3,7 +3,8 @@ import { TOONSTREAM_BASE } from "../lib/const.js";
 import { AnimeCard } from "../lib/types.js";
 
 export async function ScrapeSearch(query: string, page: number = 1) {
-  const url = `${TOONSTREAM_BASE}/home/${page == 1 ? "" : `page/${page}/`}?s=${decodeURIComponent(query).replaceAll(" ", "+")}`;
+  const url = `${TOONSTREAM_BASE}/${page == 1 ? "" : `page/${page}/`}?s=${decodeURIComponent(query).replaceAll(" ", "+")}`;
+  console.log(url);
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error("Failed to fetch " + url);

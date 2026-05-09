@@ -21,7 +21,7 @@ export interface AnizenSearchItem {
 }
 
 export interface AnizenSuggestionItem extends AnizenSearchItem {
-  year?: string | null;
+  year?: string;
 }
 
 export interface AnizenSpotlightItem {

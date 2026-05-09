@@ -111,7 +111,7 @@ export class Anizen {
     const out = await this.search(query, 1);
     // Animekai's suggestion shape adds `year` (and is otherwise card-shaped).
     // Anizen search items don't expose year separately, so we leave it null.
-    return out.results.slice(0, 10).map((r) => ({ ...r, year: null }));
+    return out.results.slice(0, 10).map((r) => ({ ...r, year: "" }));
   }
 
   // ─── Filter-backed browse endpoints ─────────────────────────────────────────

@@ -5,18 +5,19 @@ import type {
   AnizenEpisode,
   AnizenInfo,
   AnizenPagedResult,
+  AnizenRelatedItem,
   AnizenScheduleItem,
   AnizenSearchItem,
-  AnizenSeasonItem,
   AnizenServer,
   AnizenSpotlightItem,
   AnizenStreamResponse,
   AnizenStreamSource,
+  AnizenSuggestionItem,
 } from "./types.js";
 
-// anizen.tr ships a clean JSON API at aniapi.anizen.tr — no scraping required.
-// Endpoints: /api/home, /api/info?id=, /api/search?keyword=&page=, /api/stream?id=&type=,
-// /api/schedule?date=, /api/filter?type=&genres=&page=, /api/random, /api/qtip/:id
+// Wraps the upstream JSON API at aniapi.anizen.tr. Endpoint set + response
+// shapes intentionally mirror src/providers/anime/animekai so /anime/anizen/*
+// is drop-in compatible with /anime/animekai/*.
 export class Anizen {
   private static api = anizenApi;
   private static site = anizenOrigin;
@@ -48,7 +49,7 @@ export class Anizen {
     }
   }
 
-  // ─── Mappers ────────────────────────────────────────────────────────────────
+  // ─── Card / Search mapping ──────────────────────────────────────────────────
 
   private static mapCard(item: any): AnizenSearchItem | null {
     if (!item || !item.id) return null;
@@ -57,46 +58,21 @@ export class Anizen {
     const dubEps = this.toInt(tv.dub ?? tv.episodeInfo?.dub);
     return {
       id: item.id,
-      dataId: item.data_id ?? null,
       title: item.title ?? "",
-      japaneseTitle: item.jname ?? null,
-      image: item.poster ?? null,
       url: `${this.site}/details/${item.id}`,
-      type: tv.showType ?? item.showType ?? null,
-      duration: tv.duration ?? item.duration ?? null,
+      image: item.poster ?? undefined,
+      japaneseTitle: item.jname ?? null,
+      type: tv.showType ?? item.showType ?? "",
       sub: subEps,
       dub: dubEps,
       episodes: Math.max(subEps, dubEps, this.toInt(tv.eps)),
     };
   }
 
-  private static mapSpotlight(item: any, idx: number): AnizenSpotlightItem | null {
-    if (!item || !item.id) return null;
-    const tv = item.tvInfo ?? {};
-    const ep = tv.episodeInfo ?? {};
-    return {
-      id: item.id,
-      dataId: item.data_id ?? null,
-      rank: idx + 1,
-      title: item.title ?? "",
-      japaneseTitle: item.jname ?? null,
-      description: item.description ?? null,
-      banner: item.poster ?? null,
-      url: `${this.site}/details/${item.id}`,
-      type: tv.showType ?? null,
-      duration: tv.duration ?? null,
-      releaseDate: tv.releaseDate ?? null,
-      quality: tv.quality ?? null,
-      sub: this.toInt(ep.sub),
-      dub: this.toInt(ep.dub),
-    };
-  }
-
-  private static mapPaged<T>(
+  private static mapPaged(
     raw: any,
     page: number,
-    mapper: (item: any) => T | null,
-  ): AnizenPagedResult<T> {
+  ): AnizenPagedResult<AnizenSearchItem> {
     const data = raw?.results?.data ?? [];
     const list = Array.isArray(data) ? data : [];
     const totalPages =
@@ -109,37 +85,14 @@ export class Anizen {
         ? raw.results.hasNextPage
         : currentPage > 0 && currentPage < totalPages;
     const results = list
-      .map((it) => mapper(it))
-      .filter((it): it is T => it !== null);
+      .map((it) => this.mapCard(it))
+      .filter((it): it is AnizenSearchItem => it !== null);
     return {
       currentPage,
       hasNextPage,
       totalPages: results.length === 0 ? 0 : totalPages,
       results,
     };
-  }
-
-  // ─── Home (used by spotlight and several browse endpoints) ──────────────────
-
-  private static homeCache: { at: number; data: any } | null = null;
-  private static HOME_TTL_MS = 60_000;
-
-  private static async getHome(): Promise<any | null> {
-    const now = Date.now();
-    if (this.homeCache && now - this.homeCache.at < this.HOME_TTL_MS) {
-      return this.homeCache.data;
-    }
-    const raw = await this.getJson("/api/home");
-    if (raw) this.homeCache = { at: now, data: raw };
-    return raw;
-  }
-
-  static async spotlight(): Promise<AnizenSpotlightItem[]> {
-    const raw = await this.getHome();
-    const arr = raw?.results?.spotlights ?? [];
-    return (Array.isArray(arr) ? arr : [])
-      .map((it: any, i: number) => this.mapSpotlight(it, i))
-      .filter((it): it is AnizenSpotlightItem => it !== null);
   }
 
   // ─── Search ─────────────────────────────────────────────────────────────────
@@ -150,12 +103,15 @@ export class Anizen {
     const raw = await this.getJson(
       `/api/search?keyword=${encodeURIComponent(query)}&page=${p}`,
     );
-    return this.mapPaged(raw, p, (it) => this.mapCard(it));
+    return this.mapPaged(raw, p);
   }
 
-  static async suggestions(query: string): Promise<AnizenSearchItem[]> {
+  static async suggestions(query: string): Promise<AnizenSuggestionItem[]> {
+    if (!query) return [];
     const out = await this.search(query, 1);
-    return out.results.slice(0, 10);
+    // Animekai's suggestion shape adds `year` (and is otherwise card-shaped).
+    // Anizen search items don't expose year separately, so we leave it null.
+    return out.results.slice(0, 10).map((r) => ({ ...r, year: null }));
   }
 
   // ─── Filter-backed browse endpoints ─────────────────────────────────────────
@@ -169,7 +125,7 @@ export class Anizen {
     for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
     qs.set("page", String(p));
     const raw = await this.getJson(`/api/filter?${qs.toString()}`);
-    return this.mapPaged(raw, p, (it) => this.mapCard(it));
+    return this.mapPaged(raw, p);
   }
 
   static movies(page = 1) {
@@ -188,38 +144,64 @@ export class Anizen {
     return this.filter({ type: "special" }, page);
   }
   static newReleases(page = 1) {
-    return this.filter({ sort: "recently_added" }, page);
+    return this.filter({ status: "Currently Airing", sort: "new" }, page);
   }
   static latestCompleted(page = 1) {
-    return this.filter({ status: "Finished+Airing", sort: "recently_added" }, page);
+    return this.filter({ status: "Finished Airing" }, page);
   }
   static genreSearch(genre: string, page = 1) {
     if (!genre) return Promise.resolve({ currentPage: 0, hasNextPage: false, totalPages: 0, results: [] });
     return this.filter({ genres: genre }, page);
   }
 
-  // ─── Home-derived browse endpoints (recent episodes / recent added) ─────────
+  // ─── Home cache (shared by spotlight + recent endpoints) ────────────────────
 
-  private static async homeSection(key: string, page: number): Promise<AnizenPagedResult<AnizenSearchItem>> {
-    const raw = await this.getHome();
-    const arr = raw?.results?.[key] ?? [];
-    const list = Array.isArray(arr) ? arr : [];
-    const results = list
-      .map((it: any) => this.mapCard(it))
-      .filter((it): it is AnizenSearchItem => it !== null);
-    return {
-      currentPage: results.length ? page : 0,
-      hasNextPage: false,
-      totalPages: results.length ? 1 : 0,
-      results,
-    };
+  private static homeCache: { at: number; data: any } | null = null;
+  private static HOME_TTL_MS = 60_000;
+
+  private static async getHome(): Promise<any | null> {
+    const now = Date.now();
+    if (this.homeCache && now - this.homeCache.at < this.HOME_TTL_MS) {
+      return this.homeCache.data;
+    }
+    const raw = await this.getJson("/api/home");
+    if (raw) this.homeCache = { at: now, data: raw };
+    return raw;
   }
 
+  static async spotlight(): Promise<AnizenSpotlightItem[]> {
+    const raw = await this.getHome();
+    const arr = raw?.results?.spotlights ?? [];
+    return (Array.isArray(arr) ? arr : [])
+      .map((it: any): AnizenSpotlightItem | null => {
+        if (!it?.id) return null;
+        const tv = it.tvInfo ?? {};
+        const ep = tv.episodeInfo ?? {};
+        return {
+          id: it.id,
+          title: it.title ?? "",
+          japaneseTitle: it.jname ?? null,
+          banner: it.poster ?? null,
+          url: `${this.site}/details/${it.id}`,
+          type: tv.showType ?? "",
+          genres: [],
+          releaseDate: tv.releaseDate ?? "",
+          quality: tv.quality ?? "",
+          sub: this.toInt(ep.sub),
+          dub: this.toInt(ep.dub),
+          description: it.description ?? "",
+        };
+      })
+      .filter((it: AnizenSpotlightItem | null): it is AnizenSpotlightItem => it !== null);
+  }
+
+  // /api/home returns empty arrays for latestEpisode / recentlyAdded; fall back
+  // to /api/filter sorted appropriately so these endpoints actually return data.
   static recentlyUpdated(page = 1) {
-    return this.homeSection("latestEpisode", page);
+    return this.filter({ sort: "recently_updated" }, page);
   }
   static recentlyAdded(page = 1) {
-    return this.homeSection("recentlyAdded", page);
+    return this.filter({ sort: "new" }, page);
   }
 
   // ─── Genres list ────────────────────────────────────────────────────────────
@@ -241,13 +223,10 @@ export class Anizen {
         if (!it?.id) return null;
         return {
           id: it.id,
-          dataId: it.data_id ?? null,
           title: it.title ?? "",
           japaneseTitle: it.jname ?? null,
           airingTime: it.time ?? "",
           airingEpisode: String(it.episode_no ?? ""),
-          releaseDate: it.releaseDate ?? null,
-          poster: it.poster ?? null,
         };
       })
       .filter((it: AnizenScheduleItem | null): it is AnizenScheduleItem => it !== null);
@@ -257,16 +236,15 @@ export class Anizen {
 
   static async info(id: string): Promise<AnizenInfo | null> {
     if (!id) return null;
-    // Strip any episode suffix the caller may have included
     const slug = id.split("$")[0]!;
     const raw = await this.getJson(`/api/info?id=${encodeURIComponent(slug)}`);
     const data = raw?.results?.data;
     if (!data || !data.id) return null;
 
-    const info = data.animeInfo ?? {};
-    const tv = info.tvInfo ?? {};
-    const sub = this.toInt(tv.sub ?? data.episode_sub_latest);
-    const dub = this.toInt(tv.dub ?? data.episode_dub_latest);
+    const animeInfo = data.animeInfo ?? {};
+    const tv = animeInfo.tvInfo ?? {};
+    const sub = this.toInt(tv.sub);
+    const dub = this.toInt(tv.dub);
 
     const episodesArr = Array.isArray(data.episodes?.episodes) ? data.episodes.episodes : [];
     const episodes: AnizenEpisode[] = episodesArr.map((ep: any): AnizenEpisode => {
@@ -282,58 +260,58 @@ export class Anizen {
       };
     });
 
-    const recommendedRaw = Array.isArray(raw?.results?.recommended_data)
-      ? raw.results.recommended_data
-      : [];
-    // Anizen returns duplicates in recommended_data — dedupe by id.
+    const recRaw = Array.isArray(data.recommended_data)
+      ? data.recommended_data
+      : Array.isArray(raw?.results?.recommended_data)
+        ? raw.results.recommended_data
+        : [];
     const seenRec = new Set<string>();
-    const recommendations: AnizenSearchItem[] = [];
-    for (const it of recommendedRaw) {
+    const recommendations: AnizenRelatedItem[] = [];
+    for (const it of recRaw) {
       if (!it?.id || seenRec.has(it.id)) continue;
       seenRec.add(it.id);
       const card = this.mapCard(it);
       if (card) recommendations.push(card);
     }
 
+    // Anizen's /api/info exposes `seasons`. Map them as relations with
+    // relationType="season" so they fit animekai's relations slot.
     const seasonsRaw = Array.isArray(raw?.results?.seasons) ? raw.results.seasons : [];
-    const seasons: AnizenSeasonItem[] = seasonsRaw.map((s: any) => ({
-      id: s.id,
-      dataId: s.data_id ?? null,
-      number: typeof s.data_number === "number" ? s.data_number : null,
-      season: s.season ?? "",
-      title: s.title ?? s.id ?? "",
-      poster: s.season_poster ?? null,
-    }));
+    const relations: AnizenRelatedItem[] = seasonsRaw
+      .filter((s: any) => s?.id && s.id !== data.id)
+      .map((s: any): AnizenRelatedItem => ({
+        id: s.id,
+        title: s.title ?? s.id,
+        url: `${this.site}/details/${s.id}`,
+        image: s.season_poster ?? undefined,
+        japaneseTitle: null,
+        type: "",
+        sub: 0,
+        dub: 0,
+        episodes: 0,
+        relationType: s.season ?? "",
+      }));
 
     return {
       id: data.id,
-      dataId: data.data_id ?? null,
-      malId: data.malId != null ? String(data.malId) : null,
-      anilistId: data.anilistId != null ? String(data.anilistId) : null,
       title: data.title ?? "",
-      japaneseTitle: data.jname ?? info.Japanese ?? null,
-      synonyms: data.synonyms ?? info.Synonyms ?? null,
-      image: data.poster ?? null,
-      description: info.Overview ?? null,
-      type: data.showType ?? tv.showType ?? null,
+      japaneseTitle: data.jname ?? animeInfo.Japanese ?? null,
+      image: data.poster ?? undefined,
+      description: animeInfo.Overview ?? undefined,
+      type: data.showType ?? tv.showType ?? undefined,
       url: `${this.site}/details/${data.id}`,
-      status: info.Status ?? null,
-      season: info.Premiered ?? null,
-      duration: info.Duration ?? tv.duration ?? null,
-      quality: tv.quality ?? null,
-      rating: tv.rating ?? null,
-      airedDate: info.Aired ?? null,
       totalEpisodes: this.toInt(data.episodes?.totalEpisodes) || episodes.length,
-      sub,
-      dub,
+      status: animeInfo.Status ?? undefined,
+      season: animeInfo.Premiered ?? undefined,
+      duration: animeInfo.Duration ?? tv.duration ?? undefined,
+      malId: data.malId != null ? String(data.malId) : undefined,
+      anilistId: data.anilistId != null ? String(data.anilistId) : undefined,
       hasSub: sub > 0,
       hasDub: dub > 0,
       subOrDub: sub > 0 && dub > 0 ? "both" : dub > 0 ? "dub" : "sub",
-      genres: Array.isArray(info.Genres) ? info.Genres : [],
-      studios: Array.isArray(info.Studios) ? info.Studios : [],
-      producers: Array.isArray(info.Producers) ? info.Producers : [],
+      genres: Array.isArray(animeInfo.Genres) ? animeInfo.Genres : [],
       recommendations,
-      seasons,
+      relations,
       episodes,
     };
   }
@@ -356,7 +334,7 @@ export class Anizen {
   }
 
   private static async fetchStream(slug: string, ep: string, type: "sub" | "dub"): Promise<any | null> {
-    // slug?ep=N must be passed unencoded for the server to parse it correctly.
+    // slug?ep=N must be passed unencoded for the upstream router to parse it.
     return this.getJson(`/api/stream?id=${slug}?ep=${ep}&type=${type}`);
   }
 
@@ -369,14 +347,20 @@ export class Anizen {
     const type = this.normalizeType(subOrDub);
     const raw = await this.fetchStream(parsed.slug, parsed.ep, type);
     const servers = Array.isArray(raw?.results?.servers) ? raw.results.servers : [];
+    const link = raw?.results?.streamingLink;
+    const intro = Array.isArray(link?.intro) ? link.intro : [0, 0];
+    const outro = Array.isArray(link?.outro) ? link.outro : [0, 0];
+    const suffix = type === "dub" ? " (Dub)" : " (HardSub)";
     return servers
       .map((s: any): AnizenServer | null => {
         if (!s?.embed) return null;
+        const baseName = s.serverName ?? s.server_name ?? "unknown";
         return {
-          name: s.serverName ?? s.server_name ?? "unknown",
+          name: `anizen ${baseName}${suffix}`.toLowerCase(),
           url: s.embed,
           isDub: type === "dub",
-          type,
+          intro: { start: this.toInt(intro[0]), end: this.toInt(intro[1]) },
+          outro: { start: this.toInt(outro[0]), end: this.toInt(outro[1]) },
         };
       })
       .filter((s: AnizenServer | null): s is AnizenServer => s !== null);
@@ -393,36 +377,51 @@ export class Anizen {
     const link = raw?.results?.streamingLink;
     const servers = Array.isArray(raw?.results?.servers) ? raw.results.servers : [];
 
+    const suffix = t === "dub" ? " (Dub)" : " (HardSub)";
     const results: AnizenStreamSource[] = [];
+    const seen = new Set<string>();
+
     if (link?.link?.file) {
+      const name = `Anizen ${link.server ?? "primary"}${suffix}`;
+      seen.add(link.server ?? "");
+      const tracks = Array.isArray(link.tracks) ? link.tracks : [];
+      const subtitles = tracks
+        .filter((tr: any) => tr?.kind !== "thumbnails")
+        .map((tr: any) => ({
+          url: tr.file ?? tr.url ?? undefined,
+          lang: tr.label ?? tr.kind ?? undefined,
+          type: t === "dub" ? "none" : "soft",
+        }));
       results.push({
-        name: link.server ?? "primary",
+        name,
         iframe: link.link.file,
-        file: link.link.file,
-        type: link.link.type ?? null,
-        isDub: t === "dub",
-      });
-    }
-    for (const s of servers) {
-      if (!s?.embed) continue;
-      // Skip the primary server when it duplicates the streamingLink entry
-      if (link?.server && s.serverName === link.server && results.length === 1) continue;
-      results.push({
-        name: s.serverName ?? s.server_name ?? "unknown",
-        iframe: s.embed,
-        file: null,
-        type: null,
-        isDub: t === "dub",
+        sources: [{ file: link.link.file, type: link.link.type ?? "hls" }],
+        subtitles,
+        download: null,
       });
     }
 
-    const intro = link?.intro ?? null;
-    const outro = link?.outro ?? null;
+    for (const s of servers) {
+      if (!s?.embed) continue;
+      const sName = s.serverName ?? s.server_name ?? "unknown";
+      if (seen.has(sName)) continue;
+      seen.add(sName);
+      results.push({
+        name: `Anizen ${sName}${suffix}`,
+        iframe: s.embed,
+        sources: [{ file: s.embed, type: "iframe" }],
+        subtitles: [],
+        download: null,
+      });
+    }
+
+    const introArr = Array.isArray(link?.intro) ? link.intro : null;
+    const outroArr = Array.isArray(link?.outro) ? link.outro : null;
     return {
       isDub: t === "dub",
       results,
-      ...(intro ? { intro } : {}),
-      ...(outro ? { outro } : {}),
+      ...(introArr ? { intro: [this.toInt(introArr[0]), this.toInt(introArr[1])] as [number, number] } : {}),
+      ...(outroArr ? { outro: [this.toInt(outroArr[0]), this.toInt(outroArr[1])] as [number, number] } : {}),
     };
   }
 }

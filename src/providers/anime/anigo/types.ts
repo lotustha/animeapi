@@ -2,7 +2,7 @@ import { z } from "zod";
 
 // ─── Paged Result Wrapper ────────────────────────────────────────────────────
 
-export interface AnimeKaiPagedResult<T> {
+export interface AnigoPagedResult<T> {
   currentPage: number;
   hasNextPage: boolean;
   totalPages: number;
@@ -11,7 +11,7 @@ export interface AnimeKaiPagedResult<T> {
 
 // ─── Search Item ─────────────────────────────────────────────────────────────
 
-export const animekaiSearchItemSchema = z.object({
+export const anigoSearchItemSchema = z.object({
   id: z.string(),
   title: z.string(),
   url: z.string(),
@@ -23,11 +23,11 @@ export const animekaiSearchItemSchema = z.object({
   episodes: z.number().optional(),
 });
 
-export type AnimeKaiSearchItem = z.infer<typeof animekaiSearchItemSchema>;
+export type AnigoSearchItem = z.infer<typeof anigoSearchItemSchema>;
 
 // ─── Related / Recommendation Item ───────────────────────────────────────────
 
-export const animekaiRelatedItemSchema = z.object({
+export const anigoRelatedItemSchema = z.object({
   id: z.string(),
   title: z.string(),
   url: z.string().optional(),
@@ -40,11 +40,11 @@ export const animekaiRelatedItemSchema = z.object({
   relationType: z.string().optional(),
 });
 
-export type AnimeKaiRelatedItem = z.infer<typeof animekaiRelatedItemSchema>;
+export type AnigoRelatedItem = z.infer<typeof anigoRelatedItemSchema>;
 
 // ─── Anime Info ───────────────────────────────────────────────────────────────
 
-export const animekaiInfoSchema = z.object({
+export const anigoInfoSchema = z.object({
   id: z.string(),
   title: z.string(),
   japaneseTitle: z.string().optional().nullable(),
@@ -62,8 +62,8 @@ export const animekaiInfoSchema = z.object({
   hasDub: z.boolean().optional(),
   subOrDub: z.enum(["sub", "dub", "both"]).optional(),
   genres: z.array(z.string()).optional(),
-  recommendations: z.array(animekaiRelatedItemSchema).optional(),
-  relations: z.array(animekaiRelatedItemSchema).optional(),
+  recommendations: z.array(anigoRelatedItemSchema).optional(),
+  relations: z.array(anigoRelatedItemSchema).optional(),
   episodes: z.array(
     z.object({
       id: z.string(),
@@ -77,12 +77,12 @@ export const animekaiInfoSchema = z.object({
   ),
 });
 
-export type AnimeKaiInfo = z.infer<typeof animekaiInfoSchema>;
-export type AnimeKaiEpisode = AnimeKaiInfo["episodes"][number];
+export type AnigoInfo = z.infer<typeof anigoInfoSchema>;
+export type AnigoEpisode = AnigoInfo["episodes"][number];
 
 // ─── Episode Server ───────────────────────────────────────────────────────────
 
-export interface AnimeKaiServer {
+export interface AnigoServer {
   name: string;
   url: string;
   isDub: boolean;

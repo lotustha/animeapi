@@ -26,7 +26,9 @@ export class MegaUp {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: n }),
       });
+      console.log("DECODED RES DATA: ", res);
       const data = await res.json();
+      console.log("DECODED  DATA RESULT: ", data.result);
       return data.result;
     } catch (error: any) {
       throw new Error(error.message, { cause: error });

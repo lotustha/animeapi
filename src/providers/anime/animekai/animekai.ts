@@ -491,6 +491,7 @@ export class AnimeKai {
 
       const ajaxToken = await MegaUp.generateToken(token);
       const url = `${this.baseUrl}/ajax/links/list?token=${token}&_=${ajaxToken}`;
+      console.log(url);
       const res = await fetch(url, { headers: this.headers() });
       const data = await res.json();
       const serverHtml = data.result;
@@ -606,9 +607,9 @@ export class AnimeKai {
               headers: this.headers(),
             })
           ).json();
-
+          console.log("VIEW DATA: ", viewData);
           const decoded = await MegaUp.decodeIframeData(viewData.result);
-          
+          console.log("DECODED: ", decoded);
           const videoSources = await MegaUp.extract(decoded.url);
 
           // Set skip times from the first parsed server

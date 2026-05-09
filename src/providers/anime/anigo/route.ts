@@ -1,17 +1,17 @@
 import { Elysia } from "elysia";
 import { Cache } from "../../../core/cache.js";
-import { AnimeKai } from "./animekai.js";
+import { Anigo } from "./anigo.js";
 
-export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
+export const anigoRoutes = new Elysia({ prefix: "/anigo" })
 
   // ─── Search ────────────────────────────────────────────────────────────────
   .get("/search/:query", async ({ params: { query }, query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `animekai:search:${query}:${page}`;
+    const key = `anigo:search:${query}:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
-    const results = await AnimeKai.search(query, page);
+    const results = await Anigo.search(query, page);
     if (results && results.results && results.results.length > 0) {
       Cache.set(key, JSON.stringify(results), 43200); // 12 hours
     }
@@ -20,23 +20,23 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
 
   // ─── Spotlight ─────────────────────────────────────────────────────────────
   .get("/spotlight", async () => {
-    const cachedData = await Cache.get("animekai:spotlight");
+    const cachedData = await Cache.get("anigo:spotlight");
     if (cachedData) return { results: JSON.parse(cachedData) };
 
-    const results = await AnimeKai.spotlight();
+    const results = await Anigo.spotlight();
     if (results && results.length > 0) {
-      Cache.set("animekai:spotlight", JSON.stringify(results), 43200); // 12 hours
+      Cache.set("anigo:spotlight", JSON.stringify(results), 43200); // 12 hours
     }
     return { results };
   })
 
   // ─── Schedule ──────────────────────────────────────────────────────────────
   .get("/schedule/:date", async ({ params: { date } }) => {
-    const key = `animekai:schedule:${date}`;
+    const key = `anigo:schedule:${date}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return { results: JSON.parse(cachedData) };
 
-    const results = await AnimeKai.schedule(date);
+    const results = await Anigo.schedule(date);
     if (results && results.length > 0) {
       Cache.set(key, JSON.stringify(results), 43200); // 12 hours
     }
@@ -45,11 +45,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
 
   // ─── Search Suggestions ────────────────────────────────────────────────────
   .get("/suggestions/:query", async ({ params: { query } }) => {
-    const key = `animekai:suggestions:${query}`;
+    const key = `anigo:suggestions:${query}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return { results: JSON.parse(cachedData) };
 
-    const results = await AnimeKai.suggestions(query);
+    const results = await Anigo.suggestions(query);
     if (results && results.length > 0) {
       Cache.set(key, JSON.stringify(results), 43200); // 12 hours
     }
@@ -59,11 +59,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
   // ─── Recent Episodes (recently updated) ────────────────────────────────────
   .get("/recent-episodes", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `animekai:recent-episodes:${page}`;
+    const key = `anigo:recent-episodes:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
-    const results = await AnimeKai.recentlyUpdated(page);
+    const results = await Anigo.recentlyUpdated(page);
     if (results && results.results && results.results.length > 0) {
       Cache.set(key, JSON.stringify(results), 60); // 1 minute for recent episodes
     }
@@ -73,11 +73,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
   // ─── Recently Added ────────────────────────────────────────────────────────
   .get("/recent-added", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `animekai:recent-added:${page}`;
+    const key = `anigo:recent-added:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
-    const results = await AnimeKai.recentlyAdded(page);
+    const results = await Anigo.recentlyAdded(page);
     if (results && results.results && results.results.length > 0) {
       Cache.set(key, JSON.stringify(results), 60); // 1 minute for recently added
     }
@@ -87,11 +87,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
   // ─── Latest Completed ──────────────────────────────────────────────────────
   .get("/completed", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `animekai:completed:${page}`;
+    const key = `anigo:completed:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
-    const results = await AnimeKai.latestCompleted(page);
+    const results = await Anigo.latestCompleted(page);
     if (results && results.results && results.results.length > 0) {
       Cache.set(key, JSON.stringify(results), 43200);
     }
@@ -101,11 +101,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
   // ─── New Releases ──────────────────────────────────────────────────────────
   .get("/new-releases", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `animekai:new-releases:${page}`;
+    const key = `anigo:new-releases:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
-    const results = await AnimeKai.newReleases(page);
+    const results = await Anigo.newReleases(page);
     if (results && results.results && results.results.length > 0) {
       Cache.set(key, JSON.stringify(results), 43200);
     }
@@ -115,11 +115,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
   // ─── Movies ────────────────────────────────────────────────────────────────
   .get("/movies", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `animekai:movies:${page}`;
+    const key = `anigo:movies:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
-    const results = await AnimeKai.movies(page);
+    const results = await Anigo.movies(page);
     if (results && results.results && results.results.length > 0) {
       Cache.set(key, JSON.stringify(results), 86400 * 7); // 7 days
     }
@@ -129,11 +129,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
   // ─── TV ────────────────────────────────────────────────────────────────────
   .get("/tv", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `animekai:tv:${page}`;
+    const key = `anigo:tv:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
-    const results = await AnimeKai.tv(page);
+    const results = await Anigo.tv(page);
     if (results && results.results && results.results.length > 0) {
       Cache.set(key, JSON.stringify(results), 86400 * 7);
     }
@@ -143,11 +143,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
   // ─── OVA ───────────────────────────────────────────────────────────────────
   .get("/ova", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `animekai:ova:${page}`;
+    const key = `anigo:ova:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
-    const results = await AnimeKai.ova(page);
+    const results = await Anigo.ova(page);
     if (results && results.results && results.results.length > 0) {
       Cache.set(key, JSON.stringify(results), 86400 * 7);
     }
@@ -157,11 +157,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
   // ─── ONA ───────────────────────────────────────────────────────────────────
   .get("/ona", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `animekai:ona:${page}`;
+    const key = `anigo:ona:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
-    const results = await AnimeKai.ona(page);
+    const results = await Anigo.ona(page);
     if (results && results.results && results.results.length > 0) {
       Cache.set(key, JSON.stringify(results), 86400 * 7);
     }
@@ -171,11 +171,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
   // ─── Specials ──────────────────────────────────────────────────────────────
   .get("/specials", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `animekai:specials:${page}`;
+    const key = `anigo:specials:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
-    const results = await AnimeKai.specials(page);
+    const results = await Anigo.specials(page);
     if (results && results.results && results.results.length > 0) {
       Cache.set(key, JSON.stringify(results), 86400 * 7);
     }
@@ -184,11 +184,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
 
   // ─── Genre List ────────────────────────────────────────────────────────────
   .get("/genres", async () => {
-    const key = `animekai:genres`;
+    const key = `anigo:genres`;
     const cachedData = await Cache.get(key);
     if (cachedData) return { results: JSON.parse(cachedData) };
 
-    const results = await AnimeKai.genres();
+    const results = await Anigo.genres();
     if (results && results.length > 0) {
       Cache.set(key, JSON.stringify(results), 86400 * 30); // 30 days
     }
@@ -198,11 +198,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
   // ─── By Genre ──────────────────────────────────────────────────────────────
   .get("/genre/:genre", async ({ params: { genre }, query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `animekai:genre:${genre}:${page}`;
+    const key = `anigo:genre:${genre}:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
-    const results = await AnimeKai.genreSearch(genre, page);
+    const results = await Anigo.genreSearch(genre, page);
     if (results && results.results && results.results.length > 0) {
       Cache.set(key, JSON.stringify(results), 86400 * 3); // 3 days
     }
@@ -216,11 +216,11 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
       return { message: "id is required" };
     }
 
-    const key = `animekai:info:${id}`;
+    const key = `anigo:info:${id}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
-    const res = await AnimeKai.info(id);
+    const res = await Anigo.info(id);
     if (!res) {
       set.status = 404;
       return { message: "Anime not found" };
@@ -241,7 +241,7 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
     const animeSlug = episodeId.split("$")[0] ?? episodeId;
 
     // Return the response directly as it's already structured perfectly
-    return await AnimeKai.streams(animeSlug, episodeId, type);
+    return await Anigo.streams(animeSlug, episodeId, type);
   })
 
   // ─── Episode Servers ───────────────────────────────────────────────────────
@@ -253,6 +253,6 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
 
     const type = qs?.type as "softsub" | "dub" | "hardsub" | undefined;
     return {
-      servers: await AnimeKai.fetchEpisodeServers(episodeId, type ?? "hardsub"),
+      servers: await Anigo.fetchEpisodeServers(episodeId, type ?? "hardsub"),
     };
   });

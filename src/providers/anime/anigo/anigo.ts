@@ -1,18 +1,30 @@
 import * as cheerio from "cheerio";
 import { Logger } from "../../../core/logger.js";
-import { animekai as animekaiOrigin } from "../../origins.js";
+import { anigo as anigoOrigin } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
 import { MegaUp } from "./scraper/megaup.js";
 import type {
-  AnimeKaiEpisode,
-  AnimeKaiInfo,
-  AnimeKaiPagedResult,
-  AnimeKaiSearchItem,
-  AnimeKaiServer,
+  AnigoEpisode,
+  AnigoInfo,
+  AnigoPagedResult,
+  AnigoRelatedItem,
+  AnigoSearchItem,
+  AnigoServer,
 } from "./types.js";
 
-export class AnimeKai {
-  private static baseUrl = animekaiOrigin;
+// Anigo encodes Japanese titles inside Alpine's x-data="JTitle(`...`)" rather than
+// using a data-jp attribute, so fall back to parsing the directive when the attr is empty.
+const JTITLE_RE = /JTitle\(\s*[`'"]([\s\S]*?)[`'"]\s*\)/;
+
+function jpTitle(el: any): string {
+  const direct = el.attr("data-jp");
+  if (direct && direct.trim()) return direct.trim();
+  const xData = el.attr("x-data");
+  return xData ? (JTITLE_RE.exec(xData)?.[1]?.trim() ?? "") : "";
+}
+
+export class Anigo {
+  private static baseUrl = anigoOrigin;
 
   private static headers(): Record<string, string> {
     return {
@@ -34,9 +46,7 @@ export class AnimeKai {
 
   // ─── Paginated Card Scraper ──────────────────────────────────────────────────
 
-  private static async scrapeCardPage(
-    url: string,
-  ): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  private static async scrapeCardPage(url: string): Promise<AnigoPagedResult<AnigoSearchItem>> {
     try {
       const res = await fetch(url, { headers: this.headers() });
       const html = await res.text();
@@ -59,26 +69,36 @@ export class AnimeKai {
       const totalPages =
         lastPageVal && lastPageVal !== "" ? parseInt(lastPageVal) || 0 : currentPage;
 
-      const results: AnimeKaiSearchItem[] = [];
-      $(".aitem").each((_, ele) => {
+      const results: AnigoSearchItem[] = [];
+      $(".unit, .aitem").each((_, ele) => {
         const card = $(ele);
-        const atag = card.find("div.inner > a");
+        const isAnchor = card.prop('tagName')?.toLowerCase() === 'a';
+        const atag = isAnchor ? card : card.find("a.poster");
+        const titleTag = card.find("h6.title");
+
         const id = atag.attr("href")?.replace("/watch/", "") || "";
-        const type = card.find(".info").children().last().text().trim();
+        // Skip Alpine.js template skeletons that match `.unit` but have no real href.
+        if (!id) return;
+        const type = card.find(".aniBadge span.type").text().trim() || card.find(".aniMeta span.type").text().trim() || card.find(".aniMeta span").first().text().trim();
+
+        const image = card.find("img").attr("data-src") || card.find("img").attr("src");
+        const title = titleTag.text().trim();
+        const japaneseTitle = jpTitle(titleTag);
+
+        const subText = card.find(".subdub .sub").text().trim();
+        const dubText = card.find(".subdub .dub").text().trim();
+        const totalText = card.find(".subdub .total").text().trim();
 
         results.push({
           id,
-          title: atag.text().trim(),
+          title,
           url: `${this.baseUrl}${atag.attr("href")}`,
-          image: card.find("img").attr("data-src") || card.find("img").attr("src"),
-          japaneseTitle: card.find("a.title").attr("data-jp")?.trim(),
+          image,
+          japaneseTitle,
           type,
-          sub: parseInt(card.find(".info span.sub").text()) || 0,
-          dub: parseInt(card.find(".info span.dub").text()) || 0,
-          episodes:
-            parseInt(card.find(".info").children().eq(-2).text().trim()) ||
-            parseInt(card.find(".info span.sub").text()) ||
-            0,
+          sub: parseInt(subText) || 0,
+          dub: parseInt(dubText) || 0,
+          episodes: parseInt(totalText) || parseInt(subText) || 0,
         });
       });
 
@@ -89,68 +109,65 @@ export class AnimeKai {
         results,
       };
     } catch (err) {
-      Logger.error(`AnimeKai scrapeCardPage error for ${url}: ${String(err)}`);
+      Logger.error(`Anigo scrapeCardPage error for ${url}: ${String(err)}`);
       return { currentPage: 0, hasNextPage: false, totalPages: 0, results: [] };
     }
   }
 
   // ─── Browsing Endpoints ──────────────────────────────────────────────────────
 
-  static async search(
-    query: string,
-    page: number = 1,
-  ): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  static async search(query: string, page: number = 1): Promise<AnigoPagedResult<AnigoSearchItem>> {
     if (page <= 0) page = 1;
     return this.scrapeCardPage(
       `${this.baseUrl}/browser?keyword=${encodeURIComponent(query.replace(/[\W_]+/g, "+"))}&page=${page}`,
     );
   }
 
-  static async latest(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  static async latest(page: number = 1): Promise<AnigoPagedResult<AnigoSearchItem>> {
     return this.recentlyUpdated(page);
   }
 
-  static async recentlyUpdated(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  static async recentlyUpdated(page: number = 1): Promise<AnigoPagedResult<AnigoSearchItem>> {
     if (page <= 0) page = 1;
     return this.scrapeCardPage(`${this.baseUrl}/updates?page=${page}`);
   }
 
-  static async latestCompleted(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  static async latestCompleted(page: number = 1): Promise<AnigoPagedResult<AnigoSearchItem>> {
     if (page <= 0) page = 1;
     return this.scrapeCardPage(`${this.baseUrl}/completed?page=${page}`);
   }
 
-  static async newReleases(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  static async newReleases(page: number = 1): Promise<AnigoPagedResult<AnigoSearchItem>> {
     if (page <= 0) page = 1;
     return this.scrapeCardPage(`${this.baseUrl}/new-releases?page=${page}`);
   }
 
-  static async recentlyAdded(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  static async recentlyAdded(page: number = 1): Promise<AnigoPagedResult<AnigoSearchItem>> {
     if (page <= 0) page = 1;
     return this.scrapeCardPage(`${this.baseUrl}/recent?page=${page}`);
   }
 
-  static async movies(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  static async movies(page: number = 1): Promise<AnigoPagedResult<AnigoSearchItem>> {
     if (page <= 0) page = 1;
     return this.scrapeCardPage(`${this.baseUrl}/movie?page=${page}`);
   }
 
-  static async tv(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  static async tv(page: number = 1): Promise<AnigoPagedResult<AnigoSearchItem>> {
     if (page <= 0) page = 1;
     return this.scrapeCardPage(`${this.baseUrl}/tv?page=${page}`);
   }
 
-  static async ova(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  static async ova(page: number = 1): Promise<AnigoPagedResult<AnigoSearchItem>> {
     if (page <= 0) page = 1;
     return this.scrapeCardPage(`${this.baseUrl}/ova?page=${page}`);
   }
 
-  static async ona(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  static async ona(page: number = 1): Promise<AnigoPagedResult<AnigoSearchItem>> {
     if (page <= 0) page = 1;
     return this.scrapeCardPage(`${this.baseUrl}/ona?page=${page}`);
   }
 
-  static async specials(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  static async specials(page: number = 1): Promise<AnigoPagedResult<AnigoSearchItem>> {
     if (page <= 0) page = 1;
     return this.scrapeCardPage(`${this.baseUrl}/special?page=${page}`);
   }
@@ -158,7 +175,7 @@ export class AnimeKai {
   static async genreSearch(
     genre: string,
     page: number = 1,
-  ): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
+  ): Promise<AnigoPagedResult<AnigoSearchItem>> {
     if (!genre) throw new Error("genre is required");
     if (page <= 0) page = 1;
     return this.scrapeCardPage(`${this.baseUrl}/genres/${genre}?page=${page}`);
@@ -172,14 +189,14 @@ export class AnimeKai {
       const html = await res.text();
       const $ = cheerio.load(html);
       const results: string[] = [];
-      $("#menu")
+      $(".headerMenu")
         .find("ul.c4 li a")
         .each((_, ele) => {
           results.push($(ele).text().trim().toLowerCase());
         });
       return results;
     } catch (err) {
-      Logger.error(`AnimeKai genres error: ${String(err)}`);
+      Logger.error(`Anigo genres error: ${String(err)}`);
       return [];
     }
   }
@@ -204,14 +221,14 @@ export class AnimeKai {
         results.push({
           id: card.find("a").attr("href")?.split("/")[2],
           title: titleElement.text().trim(),
-          japaneseTitle: titleElement.attr("data-jp"),
+          japaneseTitle: jpTitle(titleElement),
           airingTime: card.find("span.time").text().trim(),
           airingEpisode: card.find("span").last().text().trim().replace("EP ", ""),
         });
       });
       return results;
     } catch (err) {
-      Logger.error(`AnimeKai schedule error: ${String(err)}`);
+      Logger.error(`Anigo schedule error: ${String(err)}`);
       return [];
     }
   }
@@ -224,46 +241,35 @@ export class AnimeKai {
       const html = await res.text();
       const $ = cheerio.load(html);
       const results: any[] = [];
-      $("div.swiper-wrapper > div.swiper-slide").each((_, el) => {
+      // section.mostViewed has three tab panels (day/week/month); only scrape the
+      // first one to avoid duplicate entries.
+      const tabPanel = $("section.mostViewed .section-inner > div[x-show]").first();
+      tabPanel.find("a.unit, a.aniOntop").each((_, el) => {
         const card = $(el);
-        const titleElement = card.find("div.detail > p.title");
-        const id = card.find("div.swiper-ctrl > a.btn").attr("href")?.replace("/watch/", "");
-        const style = card.attr("style") || "";
-        const banner = style.match(/background-image:\s*url\(["']?(.+?)["']?\)/)?.[1] || null;
+        const isOntop = card.hasClass("aniOntop");
+        const titleElement = card.find(isOntop ? "h5.title" : "h6.title");
+        const id = card.attr("href")?.replace("/watch/", "");
+
+        const posterDiv = card.find(".poster > div");
+        const style = posterDiv.attr("style") || "";
+        const banner = style.match(/background-image:\s*url\((['"]?)(.+?)\1\)/)?.[2] || null;
+        const image = banner || card.find("img").attr("data-src") || card.find("img").attr("src");
 
         results.push({
           id,
           title: titleElement.text().trim(),
-          japaneseTitle: titleElement.attr("data-jp"),
-          banner,
-          url: `${this.baseUrl}/watch/${id}`,
-          type: card.find("div.detail > div.info").children().eq(-2).text().trim(),
-          genres: card
-            .find("div.detail > div.info")
-            .children()
-            .last()
-            .text()
-            .trim()
-            .split(",")
-            .map((g) => g.trim()),
-          releaseDate: card
-            .find('div.detail > div.mics > div:contains("Release")')
-            .children("span")
-            .text()
-            .trim(),
-          quality: card
-            .find('div.detail > div.mics > div:contains("Quality")')
-            .children("span")
-            .text()
-            .trim(),
-          sub: parseInt(card.find("div.detail > div.info > span.sub").text().trim()) || 0,
-          dub: parseInt(card.find("div.detail > div.info > span.dub").text().trim()) || 0,
-          description: card.find("div.detail > p.desc").text().trim(),
+          japaneseTitle: jpTitle(titleElement),
+          banner: image,
+          url: `${this.baseUrl}${card.attr("href")}`,
+          type: card.find("span.type").text().trim(),
+          sub: parseInt(card.find(".sub").text().trim()) || 0,
+          dub: parseInt(card.find(".dub").text().trim()) || 0,
+          episodes: parseInt(card.find(".total").text().trim()) || parseInt(card.find(".sub").text().trim()) || 0,
         });
       });
       return results;
     } catch (err) {
-      Logger.error(`AnimeKai spotlight error: ${String(err)}`);
+      Logger.error(`Anigo spotlight error: ${String(err)}`);
       return [];
     }
   }
@@ -279,7 +285,7 @@ export class AnimeKai {
       const htmlContent = data.result?.html ?? data.result ?? "";
       const $ = cheerio.load(typeof htmlContent === "string" ? htmlContent : "");
       const results: any[] = [];
-      $("a.aitem").each((_, el) => {
+      $("a.aitem, a.unit").each((_, el) => {
         const card = $(el);
         const titleElement = card.find(".title");
         const id = card.attr("href")?.split("/")[2];
@@ -287,25 +293,25 @@ export class AnimeKai {
           id,
           title: titleElement.text().trim(),
           url: `${this.baseUrl}/watch/${id}`,
-          japaneseTitle: titleElement.attr("data-jp") || null,
-          image: card.find(".poster img").attr("src"),
-          type: card.find(".info").children().eq(-3).text().trim(),
+          japaneseTitle: jpTitle(titleElement) || null,
+          image: card.find(".poster img").attr("src") || card.find("img").attr("data-src") || card.find("img").attr("src"),
+          type: card.find(".info").children().eq(-3).text().trim() || card.find(".aniBadge span.type").text().trim() || card.find(".aniMeta span.type").text().trim() || card.find(".aniMeta span").first().text().trim(),
           year: card.find(".info").children().eq(-2).text().trim(),
-          sub: parseInt(card.find(".info span.sub").text()) || 0,
-          dub: parseInt(card.find(".info span.dub").text()) || 0,
-          episodes: parseInt(card.find(".info").children().eq(-4).text().trim()) || 0,
+          sub: parseInt(card.find(".info span.sub").text() || card.find(".subdub .sub").text()) || 0,
+          dub: parseInt(card.find(".info span.dub").text() || card.find(".subdub .dub").text()) || 0,
+          episodes: parseInt(card.find(".info").children().eq(-4).text().trim() || card.find(".subdub .total").text().trim()) || 0,
         });
       });
       return results;
     } catch (err) {
-      Logger.error(`AnimeKai suggestions error: ${String(err)}`);
+      Logger.error(`Anigo suggestions error: ${String(err)}`);
       return [];
     }
   }
 
   // ─── Anime Info ──────────────────────────────────────────────────────────────
 
-  static async info(id: string): Promise<AnimeKaiInfo | null> {
+  static async info(id: string): Promise<AnigoInfo | null> {
     try {
       const animeSlug = id.split("$")[0]!;
       const res = await fetch(`${this.baseUrl}/watch/${animeSlug}`, {
@@ -314,52 +320,61 @@ export class AnimeKai {
       const html = await res.text();
       const $ = cheerio.load(html);
 
+      // Anigo wraps the metadata in `section.aniDetail` (not animekai's `.entity-scroll`).
+      const detail = $("section.aniDetail");
+      const main = detail.find(".mainData .dataScroll");
+      const titleEl = main.find(".title").first();
+      const aniMeta = main.find(".aniMeta").first();
+      const subdub = aniMeta.find(".subdub");
+      const detailRows = main.find(".detail");
+
+      const subCount = parseInt(subdub.find(".sub").text().trim()) || 0;
+      const dubCount = parseInt(subdub.find(".dub").text().trim()) || 0;
+
       const info: any = {
         id: animeSlug,
-        title: $(".entity-scroll > .title").text().trim(),
-        japaneseTitle: $(".entity-scroll > .title").attr("data-jp")?.trim(),
-        image: $("div.poster > div > img").attr("src"),
-        description: $(".entity-scroll > .desc").text().trim(),
-        type: $(".entity-scroll > .info").children().last().text().toUpperCase(),
+        title: titleEl.text().trim(),
+        japaneseTitle: jpTitle(titleEl),
+        image: detail.find(".posterZone .poster img").attr("src"),
+        description: main.find(".desc").text().trim(),
+        // Type sits as the bold child of an .aniMeta <span> (e.g. <span><b>TV</b></span>).
+        type: aniMeta.find("span > b").first().text().trim().toUpperCase(),
+        rating: aniMeta.find(".rating").text().trim() || null,
         url: `${this.baseUrl}/watch/${animeSlug}`,
+        sub: subCount,
+        dub: dubCount,
       };
 
-      // Sub / dub availability
-      const hasSub = $(".entity-scroll > .info > span.sub").length > 0;
-      const hasDub = $(".entity-scroll > .info > span.dub").length > 0;
+      const hasSub = subCount > 0;
+      const hasDub = dubCount > 0;
       info.hasSub = hasSub;
       info.hasDub = hasDub;
       info.subOrDub = hasSub && hasDub ? "both" : hasDub ? "dub" : "sub";
 
-      // Genres
-      $(".entity-scroll > .detail div").each(function () {
-        const text = $(this).text().trim();
-        if (text.startsWith("Genres:")) {
-          info.genres = text
-            .replace("Genres:", "")
-            .split(",")
-            .map((g: string) => g.trim());
-        }
-      });
+      // Genres live in `<div class="genre"><a>...</a></div>` directly, not in `.detail` rows.
+      info.genres = main
+        .find(".genre a")
+        .toArray()
+        .map((a) => $(a).text().trim())
+        .filter(Boolean);
 
-      // Status
-      const statusText = $(".entity-scroll > .detail")
-        .find("div:contains('Status') > span")
-        .text()
-        .trim();
-      info.status = statusText;
+      const rowText = (label: string) =>
+        detailRows
+          .find(`div:contains('${label}')`)
+          .first()
+          .find("span")
+          .first()
+          .text()
+          .trim();
 
-      info.season = $(".entity-scroll > .detail")
-        .find("div:contains('Premiered') > span")
-        .text()
-        .trim();
-      info.duration = $(".entity-scroll > .detail")
-        .find("div:contains('Duration') > span")
-        .text()
-        .trim();
+      info.status = rowText("Status");
+      info.season = rowText("Premiered");
+      info.duration = rowText("Duration");
+      info.totalEpisodes = parseInt(rowText("Episodes")) || null;
 
-      // External links (MAL / AniList)
-      $(".entity-scroll > .detail div")
+      // External link IDs (MAL / AniList).
+      detailRows
+        .find("div")
         .filter((_, el) => $(el).text().includes("Links:"))
         .find("a")
         .each((_, el) => {
@@ -372,109 +387,104 @@ export class AnimeKai {
           }
         });
 
-      // Recommendations
+      const parseSidebarCard = (a: any) => {
+        const card = $(a);
+        const titleTag = card.find("h6.title, h5.title").first();
+        const meta = card.find(".aniMeta");
+        const href = card.attr("href") ?? "";
+        return {
+          id: href.replace("/watch/", ""),
+          title: titleTag.text().trim(),
+          japaneseTitle: jpTitle(titleTag),
+          url: `${this.baseUrl}${href}`,
+          image: card.find(".poster img").attr("src") || card.find("img").attr("data-src"),
+          type: meta.find("span").first().text().trim().toUpperCase(),
+          rating: meta.find(".rating").text().trim() || null,
+          year: meta.find(".time").text().trim() || null,
+        };
+      };
+
+      // Recommendations and Relations are sibling <section> blocks identified by their h2.
+      // The RELATED section ships every dropdown tab panel (Summary/Character/Side Story/...)
+      // pre-rendered in the HTML, so dedupe by id to avoid the same card appearing N times.
       info.recommendations = [];
-      $("section.sidebar-section:not(#related-anime) .aitem-col .aitem").each((_, ele) => {
-        const aTag = $(ele);
-        const recId = aTag.attr("href")?.replace("/watch/", "");
-        info.recommendations!.push({
-          id: recId,
-          title: aTag.find(".title").text().trim(),
-          url: `${this.baseUrl}${aTag.attr("href")}`,
-          image:
-            aTag.attr("style")?.match(/background-image:\s*url\('(.+?)'\)/)?.[1] ??
-            aTag.find("img").attr("src"),
-          japaneseTitle: aTag.find(".title").attr("data-jp")?.trim(),
-          type: aTag.find(".info").children().last().text().trim(),
-          sub: parseInt(aTag.find(".info span.sub").text()) || 0,
-          dub: parseInt(aTag.find(".info span.dub").text()) || 0,
-          episodes:
-            parseInt(aTag.find(".info").children().eq(-2).text().trim()) ||
-            parseInt(aTag.find(".info span.sub").text()) ||
-            0,
-        });
-      });
-
-      // Relations
       info.relations = [];
-      $("section#related-anime .aitem-col a.aitem").each((_, el) => {
-        const aTag = $(el);
-        const infoBox = aTag.find(".info");
-        const relId = aTag.attr("href")?.replace("/watch/", "") ?? "";
-        const bolds = infoBox.find("span > b");
-        let episodes = 0;
-        let type = "";
-        let relationType = "";
-        bolds.each((_, b) => {
-          const text = $(b).text().trim();
-          if ($(b).hasClass("text-muted")) {
-            relationType = text;
-          } else if (/^\d+$/.test(text)) {
-            episodes = parseInt(text);
-          } else {
-            type = text;
-          }
-        });
-        info.relations!.push({
-          id: relId,
-          title: aTag.find(".title").text().trim(),
-          url: `${this.baseUrl}${aTag.attr("href")}`,
-          image: aTag.attr("style")?.match(/background-image:\s*url\('(.+?)'\)/)?.[1],
-          japaneseTitle: aTag.find(".title").attr("data-jp")?.trim(),
-          type: type.toUpperCase(),
-          sub: parseInt(infoBox.find(".sub").text()) || 0,
-          dub: parseInt(infoBox.find(".dub").text()) || 0,
-          relationType,
-          episodes,
-        });
+      const seenRecs = new Set<string>();
+      const seenRels = new Set<string>();
+
+      $("section").each((_, sec) => {
+        const heading = $(sec).find("h2.sectionTitle").first().text().trim().toUpperCase();
+        if (heading !== "RECOMMENDED" && heading !== "RELATED") return;
+        const isRec = heading === "RECOMMENDED";
+        const target = isRec ? info.recommendations : info.relations;
+        const seen = isRec ? seenRecs : seenRels;
+        $(sec)
+          .find("a.unit")
+          .each((_, a) => {
+            const card = parseSidebarCard(a);
+            if (!card.id || seen.has(card.id)) return;
+            seen.add(card.id);
+            target.push(card);
+          });
       });
 
-      // Episodes
-      const aniId = $(".rate-box#anime-rating").attr("data-id");
-      if (!aniId) return info;
+      // Episodes — anigo replaced the legacy /ajax/episodes/list with a JSON API at
+      // /api/v1/titles/{aniId}/episodes. The response shape is:
+      //   { result: { langs, episodeCount, rangedEpisodes: [{ label, episodes: [...] }] } }
+      info.episodes = [];
+      try {
+        // The ani_id is embedded in `.rate-box[x-data="Rating('<id>')"]`.
+        const rateXData = $(".rate-box").attr("x-data") ?? "";
+        const aniId = /Rating\(\s*['"`]([^'"`]+)['"`]\s*\)/.exec(rateXData)?.[1];
+        if (!aniId) return info;
+        info.aniId = aniId;
 
-      const episodesToken = await MegaUp.generateToken(aniId);
-      const episodesRes = await fetch(
-        `${this.baseUrl}/ajax/episodes/list?ani_id=${aniId}&_=${episodesToken}`,
-        {
-          headers: {
-            ...this.headers(),
-            "X-Requested-With": "XMLHttpRequest",
-            Referer: `${this.baseUrl}/watch/${animeSlug}`,
+        const episodesToken = await MegaUp.generateToken(aniId);
+        const episodesRes = await fetch(
+          `${this.baseUrl}/api/v1/titles/${aniId}/episodes?_=${episodesToken}`,
+          {
+            headers: {
+              ...this.headers(),
+              "X-Requested-With": "XMLHttpRequest",
+              Referer: `${this.baseUrl}/watch/${animeSlug}`,
+            },
           },
-        },
-      );
-      const epData = await episodesRes.json();
-      const epHtml = epData.result;
+        );
+        const epData = (await episodesRes.json()) as {
+          status?: string;
+          result?: {
+            langs?: string[];
+            episodeCount?: number;
+            rangedEpisodes?: { label: string; episodes: any[] }[];
+          };
+        };
+        const result = epData.result;
+        if (!result || !Array.isArray(result.rangedEpisodes)) return info;
 
-      if (typeof epHtml === "string") {
-        const $$ = cheerio.load(epHtml);
-        info.totalEpisodes = $$("div.eplist > ul > li").length;
-        info.episodes = [];
+        info.totalEpisodes = result.episodeCount ?? null;
 
-        const subCount = parseInt($(".entity-scroll > .info > span.sub").text()) || 0;
-        const dubCount = parseInt($(".entity-scroll > .info > span.dub").text()) || 0;
-
-        $$("div.eplist > ul > li > a").each((_, el) => {
-          const numAttr = $$(el).attr("num")!;
-          const tokenAttr = $$(el).attr("token")!;
-          const number = parseInt(numAttr);
-
-          info.episodes.push({
-            id: `${animeSlug}$ep=${numAttr}$token=${tokenAttr}`,
-            number,
-            title: $$(el).children("span").text().trim(),
-            isFiller: $$(el).hasClass("filler"),
-            isSubbed: number <= subCount,
-            isDubbed: number <= dubCount,
-            url: `${this.baseUrl}/watch/${animeSlug}${$$(el).attr("href")}ep=${numAttr}`,
-          });
-        });
+        for (const range of result.rangedEpisodes) {
+          for (const ep of range.episodes ?? []) {
+            const number = Number(ep.number);
+            info.episodes.push({
+              id: `${animeSlug}$ep=${ep.slug ?? number}$token=${ep.token}`,
+              number,
+              title: ep.detail_name ?? ep.name ?? `Episode ${number}`,
+              isFiller: !!ep.is_filler,
+              isSubbed: number <= subCount,
+              isDubbed: number <= dubCount,
+              releaseDate: ep.detail_release ?? null,
+              url: `${this.baseUrl}/watch/${animeSlug}#ep=${ep.slug ?? number}`,
+            });
+          }
+        }
+      } catch (err) {
+        Logger.warn(`Anigo info: episodes api unavailable for ${animeSlug}: ${String(err)}`);
       }
 
       return info;
     } catch (err) {
-      Logger.error(`AnimeKai info error: ${String(err)}`);
+      Logger.error(`Anigo info error: ${String(err)}`);
       return null;
     }
   }
@@ -484,7 +494,7 @@ export class AnimeKai {
   static async fetchEpisodeServers(
     episodeId: string,
     subOrDub: "softsub" | "dub" | "hardsub" = "hardsub",
-  ): Promise<AnimeKaiServer[]> {
+  ): Promise<AnigoServer[]> {
     try {
       const token = episodeId.split("$token=")[1];
       if (!token) return [];
@@ -498,7 +508,7 @@ export class AnimeKai {
       if (typeof serverHtml !== "string") return [];
 
       const $ = cheerio.load(serverHtml);
-      const servers: AnimeKaiServer[] = [];
+      const servers: AnigoServer[] = [];
 
       const targetGroups =
         subOrDub === "dub"
@@ -552,7 +562,7 @@ export class AnimeKai {
 
       return servers;
     } catch (err) {
-      Logger.error(`AnimeKai fetchEpisodeServers error: ${String(err)}`);
+      Logger.error(`Anigo fetchEpisodeServers error: ${String(err)}`);
       return [];
     }
   }
@@ -648,7 +658,7 @@ export class AnimeKai {
         ...(globalOutro && { outro: globalOutro }),
       };
     } catch (err) {
-      Logger.error(`AnimeKai streams error: ${String(err)}`);
+      Logger.error(`Anigo streams error: ${String(err)}`);
       return { isDub: false, results: [] };
     }
   }
@@ -667,10 +677,10 @@ export class AnimeKai {
       const info = await this.info(animeId);
       if (!info) return null;
 
-      const episode = info.episodes.find((ep: AnimeKaiEpisode) => ep.number === episodeNumber);
+      const episode = info.episodes.find((ep: AnigoEpisode) => ep.number === episodeNumber);
       return episode ? episode.id : null;
     } catch (err) {
-      Logger.error(`AnimeKai getEpisodeSession error: ${String(err)}`);
+      Logger.error(`Anigo getEpisodeSession error: ${String(err)}`);
       return null;
     }
   }
@@ -707,7 +717,7 @@ export class AnimeKai {
         name: info.title,
       };
     } catch (err) {
-      Logger.error(`AnimeKai getMappingsAndName error: ${String(err)}`);
+      Logger.error(`Anigo getMappingsAndName error: ${String(err)}`);
       return null;
     }
   }

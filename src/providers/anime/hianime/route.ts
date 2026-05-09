@@ -20,6 +20,15 @@ export const hianimeRoutes = new Elysia({ prefix: "/hianime" })
     return data;
   })
 
+  // ─── Spotlight ───────────────────────────────────────────────────────────────
+  .get("/spotlight", async () => {
+    const cached = await Cache.get("hianime:spotlight");
+    if (cached) return { results: JSON.parse(cached) };
+    const results = await HiAnime.spotlight();
+    if (results.length) Cache.set("hianime:spotlight", JSON.stringify(results), 43200);
+    return { results };
+  })
+
   // ─── Search ──────────────────────────────────────────────────────────────────
   .get("/search/:query", async ({ params: { query }, query: qs }) => {
     const page = intParam(qs?.page);

@@ -6,6 +6,7 @@ import { animesaltRoutes } from "./animesalt/route.js";
 
 import { anigoRoutes } from "./anigo/route.js";
 import { hianimeRoutes } from "./hianime/route.js";
+import { anizenRoutes } from "./anizen/route.js";
 
 export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(animepaheRoutes)
@@ -14,6 +15,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(animesaltRoutes)
   .use(anigoRoutes)
   .use(hianimeRoutes)
+  .use(anizenRoutes)
 
   // ─── Overview Endpoint ────────────────────────────────────────────────────────
   .get(
@@ -21,7 +23,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
     () => ({
       service: "anime",
       description: "Unified anime API — provider-isolated route architecture",
-      providers: ["animepahe", "animekai", "toonstream", "animesalt", "anigo", "hianime"],
+      providers: ["animepahe", "animekai", "toonstream", "animesalt", "anigo", "hianime", "anizen"],
       endpoints: {
         animepahe: [
           "GET /anime/animepahe/search/:query         → Search titles",
@@ -89,6 +91,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
 
         hianime: [
           "GET /anime/hianime/home                  → Home page (spotlight, trending, latest, most-viewed)",
+          "GET /anime/hianime/spotlight             → Spotlight anime",
           "GET /anime/hianime/search/:query?page=N  → Paginated search",
           "GET /anime/hianime/suggestions/:query    → Search suggestions (autocomplete)",
           "GET /anime/hianime/recent-episodes?page= → Recently updated episodes",
@@ -105,6 +108,27 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/hianime/info/:id              → Full title details + episodes (JSON API)",
           "GET /anime/hianime/servers/:episodeId    → Episode servers (query: type=hardsub|softsub|dub)",
           "GET /anime/hianime/watch/:episodeId      → Decrypted m3u8 sources + subtitles + intro/outro skip (query: type)",
+        ],
+
+        anizen: [
+          "GET /anime/anizen/search/:query          → Paginated search",
+          "GET /anime/anizen/spotlight              → Spotlight anime",
+          "GET /anime/anizen/schedule/:date         → Airing schedule (YYYY-MM-DD)",
+          "GET /anime/anizen/suggestions/:query     → Search suggestions",
+          "GET /anime/anizen/recent-episodes        → Recently updated episodes",
+          "GET /anime/anizen/recent-added           → Recently added series",
+          "GET /anime/anizen/completed              → Latest completed series",
+          "GET /anime/anizen/new-releases           → New releases",
+          "GET /anime/anizen/movies                 → Movies",
+          "GET /anime/anizen/tv                     → TV Series",
+          "GET /anime/anizen/ova                    → OVAs",
+          "GET /anime/anizen/ona                    → ONAs",
+          "GET /anime/anizen/specials               → Specials",
+          "GET /anime/anizen/genres                 → Available genres",
+          "GET /anime/anizen/genre/:genre           → Browse by genre",
+          "GET /anime/anizen/info/:id               → Full title details + episodes (JSON API)",
+          "GET /anime/anizen/watch/:episodeId       → Stream sources (query: type=sub|dub)",
+          "GET /anime/anizen/servers/:episodeId     → Episode servers (query: type)",
         ],
       },
     }),

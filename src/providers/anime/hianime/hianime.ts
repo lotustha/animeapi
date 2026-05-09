@@ -271,6 +271,11 @@ export class HiAnime {
     }
   }
 
+  static async spotlight(): Promise<HiAnimeSpotlight[]> {
+    const home = await this.home();
+    return home.spotlight;
+  }
+
   // ─── Suggestions (search dropdown) ──────────────────────────────────────────
 
   static async suggestions(query: string): Promise<HiAnimeCard[]> {

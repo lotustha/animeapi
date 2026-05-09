@@ -2,6 +2,8 @@ export const animepahe = "https://animepahe.pw";
 export const animekai = "https://anikai.to";
 export const anigo = "https://anigo.to";
 export const hianime = "https://hianime.ws";
+export const anizen = "https://anizen.tr";
+export const anizen_api = "https://aniapi.anizen.tr";
 export const toonstream = "https://toonstream.dad";
 export const animesalt = "https://animesalt.ac";
 

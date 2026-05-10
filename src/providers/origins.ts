@@ -7,6 +7,11 @@ export const anizen_api = "https://aniapi.anizen.tr";
 export const toonstream = "https://toonstream.dad";
 export const animesalt = "https://animesalt.ac";
 
+export const anilist = "https://anilist.co";
+export const anilist_graphql = "https://graphql.anilist.co";
+export const jikan_api = "https://api.jikan.moe/v4";
+export const vidnest = "https://vidnest.fun";
+
 export const flixhq = "https://flixhq.to";
 export const yflix = "https://yflix.to";
 export const primesrc = "https://primesrc.me";

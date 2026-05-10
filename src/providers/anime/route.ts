@@ -7,6 +7,7 @@ import { animesaltRoutes } from "./animesalt/route.js";
 import { anigoRoutes } from "./anigo/route.js";
 import { hianimeRoutes } from "./hianime/route.js";
 import { anizenRoutes } from "./anizen/route.js";
+import { anividRoutes } from "./anivid/route.js";
 
 export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(animepaheRoutes)
@@ -16,6 +17,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(anigoRoutes)
   .use(hianimeRoutes)
   .use(anizenRoutes)
+  .use(anividRoutes)
 
   // ─── Overview Endpoint ────────────────────────────────────────────────────────
   .get(
@@ -23,7 +25,16 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
     () => ({
       service: "anime",
       description: "Unified anime API — provider-isolated route architecture",
-      providers: ["animepahe", "animekai", "toonstream", "animesalt", "anigo", "hianime", "anizen"],
+      providers: [
+        "animepahe",
+        "animekai",
+        "toonstream",
+        "animesalt",
+        "anigo",
+        "hianime",
+        "anizen",
+        "anivid",
+      ],
       endpoints: {
         animepahe: [
           "GET /anime/animepahe/search/:query         → Search titles",
@@ -129,6 +140,22 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/anizen/info/:id               → Full title details + episodes (JSON API)",
           "GET /anime/anizen/watch/:episodeId       → Stream sources (query: type=sub|dub)",
           "GET /anime/anizen/servers/:episodeId     → Episode servers (query: type)",
+        ],
+
+        anivid: [
+          "GET /anime/anivid/search/:query          → Paginated search (AniList GraphQL)",
+          "GET /anime/anivid/suggestions/:query     → Search suggestions",
+          "GET /anime/anivid/trending               → Trending anime",
+          "GET /anime/anivid/popular                → Most popular",
+          "GET /anime/anivid/top-rated              → Highest rated",
+          "GET /anime/anivid/seasonal               → Current season",
+          "GET /anime/anivid/upcoming               → Not yet released",
+          "GET /anime/anivid/schedule/:date         → Airing schedule (YYYY-MM-DD, UTC)",
+          "GET /anime/anivid/genres                 → Available genres",
+          "GET /anime/anivid/genre/:genre           → Browse by genre",
+          "GET /anime/anivid/info/:id               → Full title details + episodes (id = AniList ID)",
+          "GET /anime/anivid/watch/:episodeId       → vidnest.fun iframe (query: type=sub|dub)",
+          "GET /anime/anivid/servers/:episodeId     → Episode servers (query: type)",
         ],
       },
     }),

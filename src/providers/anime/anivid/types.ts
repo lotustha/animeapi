@@ -1,0 +1,103 @@
+// Shapes mirror src/providers/anime/anizen/types.ts (which itself mirrors
+// animekai), so /anime/anivid/* is drop-in compatible with /anime/anizen/*.
+
+export interface AnividPagedResult<T> {
+  currentPage: number;
+  hasNextPage: boolean;
+  totalPages: number;
+  results: T[];
+}
+
+export interface AnividSearchItem {
+  id: string;
+  title: string;
+  url?: string;
+  image?: string;
+  japaneseTitle?: string | null;
+  type?: string;
+  sub?: number;
+  dub?: number;
+  episodes?: number;
+}
+
+export interface AnividSuggestionItem extends AnividSearchItem {
+  year?: string;
+}
+
+export interface AnividScheduleItem {
+  id: string | undefined;
+  title: string;
+  japaneseTitle?: string | null;
+  airingTime: string;
+  airingEpisode: string;
+}
+
+export interface AnividRelatedItem {
+  id: string;
+  title: string;
+  url?: string;
+  image?: string;
+  japaneseTitle?: string | null;
+  type?: string;
+  sub?: number;
+  dub?: number;
+  episodes?: number;
+  relationType?: string;
+}
+
+export interface AnividEpisode {
+  id: string;
+  number: number;
+  title: string;
+  isFiller: boolean;
+  isSubbed: boolean;
+  isDubbed: boolean;
+  url: string;
+}
+
+export interface AnividInfo {
+  id: string;
+  title: string;
+  japaneseTitle?: string | null;
+  image?: string;
+  cover?: string | null;
+  description?: string;
+  type?: string;
+  url?: string;
+  totalEpisodes?: number;
+  status?: string;
+  season?: string;
+  duration?: string;
+  malId?: string;
+  anilistId?: string;
+  hasSub?: boolean;
+  hasDub?: boolean;
+  subOrDub?: "sub" | "dub" | "both";
+  genres?: string[];
+  recommendations?: AnividRelatedItem[];
+  relations?: AnividRelatedItem[];
+  episodes: AnividEpisode[];
+}
+
+export interface AnividServer {
+  name: string;
+  url: string;
+  isDub: boolean;
+  intro: { start: number; end: number };
+  outro: { start: number; end: number };
+}
+
+export interface AnividStreamSource {
+  name: string;
+  iframe: string;
+  sources: { file: string; type: string }[];
+  subtitles: { url?: string; lang?: string; type: string }[];
+  download: string | null;
+}
+
+export interface AnividStreamResponse {
+  isDub: boolean;
+  results: AnividStreamSource[];
+  intro?: [number, number];
+  outro?: [number, number];
+}

@@ -1,6 +1,8 @@
 import { Logger } from "../../../core/logger.js";
+import { proxifySource } from "../../../core/proxy.js";
 import { anilist as anilistSite, anilist_graphql, jikan_api, vidnest } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
+import { decryptCipherResponse } from "./scraper/decrypt.js";
 import type {
   AnividEpisode,
   AnividInfo,
@@ -28,6 +30,23 @@ export class Anivid {
   private static embed = vidnest;
   private static jikan = jikan_api;
   private static PER_PAGE = 20;
+
+  // vidnest's player calls this backend directly (reverse-engineered from
+  // /_next/static/chunks/1ac7e9456f1ffbf0.js). Each "server" hits a different
+  // upstream behind their CDN and is enforced server-side via the Referer.
+  private static VIDNEST_BACKEND = "https://new.vidnest.fun";
+  private static VIDNEST_SERVERS = [
+    {
+      name: "anitaku",
+      referer: "https://anitaku.to",
+      path: (id: string, ep: number, t: "sub" | "dub") => `/anitaku/${id}/${ep}/${t}/hd-2`,
+    },
+    {
+      name: "aniwave_hls",
+      referer: "https://aniwaves.ru/",
+      path: (id: string, ep: number, t: "sub" | "dub") => `/aniwave_hls/${id}/${ep}/${t}`,
+    },
+  ] as const;
 
   private static headers(): Record<string, string> {
     return {
@@ -586,6 +605,65 @@ export class Anivid {
     return `${this.embed}/anime/${anilistId}/${ep}/${type}`;
   }
 
+  // Resolve a real m3u8 by hitting new.vidnest.fun and running the response
+  // through the custom-base64 decoder. Tries each server in order until one
+  // returns sources; returns null if all fail (caller falls back to iframe).
+  private static async resolveVidnestSource(
+    anilistId: string,
+    ep: number,
+    t: "sub" | "dub",
+  ): Promise<{
+    server: string;
+    referer: string;
+    quality?: string;
+    m3u8: string;
+    subtitles: string[];
+  } | null> {
+    for (const srv of this.VIDNEST_SERVERS) {
+      try {
+        const url = `${this.VIDNEST_BACKEND}${srv.path(anilistId, ep, t)}`;
+        const res = await fetch(url, {
+          headers: {
+            "User-Agent": USER_AGENT,
+            Accept: "application/json, text/plain, */*",
+            Referer: srv.referer,
+            Origin: srv.referer.replace(/\/$/, ""),
+          },
+        });
+        if (!res.ok) {
+          Logger.warn(`Anivid ${srv.name} HTTP ${res.status} for ${anilistId}/${ep}/${t}`);
+          continue;
+        }
+        const payload = await decryptCipherResponse(res);
+        const sources: any[] = Array.isArray(payload?.sources)
+          ? payload.sources
+          : Array.isArray(payload?.multiSrc)
+            ? payload.multiSrc
+            : [];
+        if (!sources.length) continue;
+        // SPA's preference order: HD-2 > HD > first url-bearing entry.
+        const picked =
+          sources.find((s: any) => s?.server === "HD-2" && typeof s?.url === "string") ||
+          sources.find((s: any) => s?.quality === "HD" && typeof s?.url === "string") ||
+          sources.find((s: any) => typeof s?.url === "string");
+        if (!picked?.url) continue;
+        const subs: string[] = Array.isArray(picked.subtitles)
+          ? picked.subtitles.filter((u: any): u is string => typeof u === "string" && u.length > 0)
+          : [];
+        return {
+          server: srv.name,
+          referer: srv.referer,
+          quality: typeof picked.quality === "string" ? picked.quality : undefined,
+          m3u8: picked.url,
+          subtitles: subs,
+        };
+      } catch (err) {
+        Logger.error(`Anivid ${srv.name} resolve error: ${String(err)}`);
+      }
+    }
+    return null;
+  }
+
   static async fetchEpisodeServers(
     episodeId: string,
     subOrDub: "softsub" | "dub" | "hardsub" = "hardsub",
@@ -594,9 +672,29 @@ export class Anivid {
     if (!parsed) return [];
     const t = this.normalizeType(subOrDub);
     const suffix = t === "dub" ? " (Dub)" : " (Sub)";
+
+    const vid = await this.resolveVidnestSource(parsed.anilistId, parsed.ep, t);
+    if (vid) {
+      const proxied = proxifySource(vid.m3u8, {
+        Referer: vid.referer,
+        "User-Agent": USER_AGENT,
+      });
+      return [
+        {
+          name: `anivid vidnest ${vid.server}${suffix}`.toLowerCase(),
+          url: proxied,
+          isDub: t === "dub",
+          intro: { start: 0, end: 0 },
+          outro: { start: 0, end: 0 },
+        },
+      ];
+    }
+
+    // Backend down — fall back to the public iframe URL so clients still have
+    // something to show.
     return [
       {
-        name: `anivid vidnest${suffix}`.toLowerCase(),
+        name: `anivid vidnest iframe${suffix}`.toLowerCase(),
         url: this.iframeUrl(parsed.anilistId, parsed.ep, t),
         isDub: t === "dub",
         intro: { start: 0, end: 0 },
@@ -612,10 +710,31 @@ export class Anivid {
     const parsed = this.parseEpisodeId(episodeId);
     if (!parsed) return { isDub: false, results: [] };
     const t = this.normalizeType(type);
-    const url = this.iframeUrl(parsed.anilistId, parsed.ep, t);
     const suffix = t === "dub" ? " (Dub)" : " (Sub)";
+
+    const vid = await this.resolveVidnestSource(parsed.anilistId, parsed.ep, t);
+    if (vid) {
+      const headers = { Referer: vid.referer, "User-Agent": USER_AGENT };
+      const proxied = proxifySource(vid.m3u8, headers);
+      const subtitles = vid.subtitles.map((u, i) => ({
+        url: u,
+        lang: `Subtitle ${i + 1}`,
+        type: t === "dub" ? "none" : "soft",
+      }));
+      const result: AnividStreamSource = {
+        name: `Anivid VidNest ${vid.server}${vid.quality ? ` ${vid.quality}` : ""}${suffix}`,
+        iframe: this.iframeUrl(parsed.anilistId, parsed.ep, t),
+        sources: [{ file: proxied, type: "hls" }],
+        subtitles,
+        download: null,
+      };
+      return { isDub: t === "dub", results: [result] };
+    }
+
+    // Iframe fallback when the vidnest backend can't be reached.
+    const url = this.iframeUrl(parsed.anilistId, parsed.ep, t);
     const result: AnividStreamSource = {
-      name: `Anivid VidNest${suffix}`,
+      name: `Anivid VidNest Iframe${suffix}`,
       iframe: url,
       sources: [{ file: url, type: "iframe" }],
       subtitles: [],

@@ -107,6 +107,10 @@ export interface AnizenStreamSource {
   sources: { file: string; type: string }[];
   subtitles: { url?: string; lang?: string; type: string }[];
   download: string | null;
+  // HTTP headers the client MUST send when fetching `sources[].file` and its
+  // segments. Some CDNs (megaplay/megacloud) hard-check Referer and return
+  // 403 otherwise. ExoPlayer/Media3 on Android can inject these directly.
+  headers?: Record<string, string>;
 }
 
 export interface AnizenStreamResponse {

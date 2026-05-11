@@ -85,6 +85,9 @@ export interface AnividServer {
   isDub: boolean;
   intro: { start: number; end: number };
   outro: { start: number; end: number };
+  // Same purpose as AnividStreamSource.headers — required when `url` points
+  // at a CDN that enforces Referer (vidnest does).
+  headers?: Record<string, string>;
 }
 
 export interface AnividStreamSource {
@@ -93,6 +96,10 @@ export interface AnividStreamSource {
   sources: { file: string; type: string }[];
   subtitles: { url?: string; lang?: string; type: string }[];
   download: string | null;
+  // HTTP headers the client MUST send when fetching `sources[].file` and its
+  // segments. VidNest CDNs hard-check Referer; ExoPlayer/Media3 on Android
+  // can inject these directly so no server-side proxying is needed.
+  headers?: Record<string, string>;
 }
 
 export interface AnividStreamResponse {

@@ -1,5 +1,4 @@
 import { Logger } from "../../../core/logger.js";
-import { proxifySource } from "../../../core/proxy.js";
 import { anilist as anilistSite, anilist_graphql, jikan_api, vidnest } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
 import { decryptCipherResponse } from "./scraper/decrypt.js";
@@ -675,17 +674,14 @@ export class Anivid {
 
     const vid = await this.resolveVidnestSource(parsed.anilistId, parsed.ep, t);
     if (vid) {
-      const proxied = proxifySource(vid.m3u8, {
-        Referer: vid.referer,
-        "User-Agent": USER_AGENT,
-      });
       return [
         {
           name: `anivid vidnest ${vid.server}${suffix}`.toLowerCase(),
-          url: proxied,
+          url: vid.m3u8,
           isDub: t === "dub",
           intro: { start: 0, end: 0 },
           outro: { start: 0, end: 0 },
+          headers: { Referer: vid.referer },
         },
       ];
     }
@@ -714,19 +710,24 @@ export class Anivid {
 
     const vid = await this.resolveVidnestSource(parsed.anilistId, parsed.ep, t);
     if (vid) {
-      const headers = { Referer: vid.referer, "User-Agent": USER_AGENT };
-      const proxied = proxifySource(vid.m3u8, headers);
       const subtitles = vid.subtitles.map((u, i) => ({
         url: u,
         lang: `Subtitle ${i + 1}`,
         type: t === "dub" ? "none" : "soft",
       }));
+      // The decrypted vidnest payload usually returns an .m3u8, but other
+      // servers occasionally hand back an iframe page. Pick the type from
+      // the URL shape rather than assuming hls.
+      const isHls = /\.m3u8(\?|$)/i.test(vid.m3u8);
+      // Return raw URL + headers. Native Android players (ExoPlayer/Media3)
+      // inject Referer directly — no server-side proxy bandwidth needed.
       const result: AnividStreamSource = {
         name: `Anivid VidNest ${vid.server}${vid.quality ? ` ${vid.quality}` : ""}${suffix}`,
         iframe: this.iframeUrl(parsed.anilistId, parsed.ep, t),
-        sources: [{ file: proxied, type: "hls" }],
+        sources: [{ file: vid.m3u8, type: isHls ? "hls" : "iframe" }],
         subtitles,
         download: null,
+        headers: { Referer: vid.referer },
       };
       return { isDub: t === "dub", results: [result] };
     }

@@ -195,11 +195,74 @@ export class Anizen {
       .filter((it: AnizenSpotlightItem | null): it is AnizenSpotlightItem => it !== null);
   }
 
-  // /api/home returns empty arrays for latestEpisode / recentlyAdded; fall back
-  // to /api/filter sorted appropriately so these endpoints actually return data.
-  static recentlyUpdated(page = 1) {
-    return this.filter({ sort: "recently_updated" }, page);
+  // /api/home returns empty arrays for latestEpisode / recentlyAdded, and
+  // /api/filter ignores the `sort` param (returns alphabetical results no
+  // matter what). The only upstream endpoint that actually yields recent
+  // airings is /api/schedule, so build the "recently updated" feed by
+  // fetching the last N days of schedules. Each page = 7 days, newest first.
+  private static formatDate(d: Date): string {
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
   }
+
+  static async recentlyUpdated(page = 1): Promise<AnizenPagedResult<AnizenSearchItem>> {
+    const p = page > 0 ? page : 1;
+    const DAYS_PER_PAGE = 7;
+    const startOffset = (p - 1) * DAYS_PER_PAGE;
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+
+    const dates: string[] = [];
+    for (let i = 0; i < DAYS_PER_PAGE; i++) {
+      const d = new Date(today);
+      d.setUTCDate(d.getUTCDate() - (startOffset + i));
+      dates.push(this.formatDate(d));
+    }
+
+    const lists = await Promise.all(
+      dates.map(async (date) => {
+        const raw = await this.getJson(`/api/schedule?date=${date}`);
+        const arr = Array.isArray(raw?.results) ? raw.results : [];
+        // Each day's airings: newest time first.
+        arr.sort((a: any, b: any) =>
+          String(b?.time ?? "").localeCompare(String(a?.time ?? "")),
+        );
+        return arr;
+      }),
+    );
+
+    const seen = new Set<string>();
+    const results: AnizenSearchItem[] = [];
+    for (const items of lists) {
+      for (const it of items) {
+        if (!it?.id || seen.has(it.id)) continue;
+        seen.add(it.id);
+        const ep = this.toInt(it.episode_no);
+        results.push({
+          id: it.id,
+          title: it.title ?? "",
+          url: `${this.site}/details/${it.id}`,
+          image: it.poster ?? undefined,
+          japaneseTitle: it.jname ?? null,
+          type: "",
+          sub: ep,
+          dub: 0,
+          episodes: ep,
+        });
+      }
+    }
+
+    return {
+      currentPage: results.length === 0 ? 0 : p,
+      // Upstream gives no totals; assume more if this page filled normally.
+      hasNextPage: results.length > 0,
+      totalPages: 0,
+      results,
+    };
+  }
+
   static recentlyAdded(page = 1) {
     return this.filter({ sort: "new" }, page);
   }
@@ -338,6 +401,97 @@ export class Anizen {
     return this.getJson(`/api/stream?id=${slug}?ep=${ep}&type=${type}`);
   }
 
+  // ─── Player resolver ───────────────────────────────────────────────────────
+  // Upstream's streamingLink.file is a /player/<token> page on aniapi.anizen.tr
+  // that wraps a megacloud-style iframe. Resolve it down to the actual m3u8:
+  //   1. GET /player/<token>/resolve with X-Requested-With: ZenPlayer
+  //        → { url: "https://vidwish.live/stream/s-2/<realId>/<sub|dub>" }
+  //   2. GET that page, scrape data-id="<fileId>" off #megaplay-player
+  //   3. GET https://megaplay.buzz/stream/getSources?id=<fileId>
+  //        → { sources:{file:<m3u8>}, tracks:[...], intro, outro }
+  // The CDN that serves the m3u8 hard-checks Referer: https://megaplay.buzz/
+  // (every other referer gets 403), so the m3u8 MUST be proxied for clients.
+
+  private static readonly PLAYER_REFERER = "https://megaplay.buzz/";
+
+  private static isPlayerUrl(url: string): boolean {
+    return /^https?:\/\/[^/]*aniapi\.anizen\.[a-z]+\/player\//i.test(url);
+  }
+
+  private static async resolvePlayer(playerUrl: string): Promise<{
+    m3u8: string;
+    subtitles: { file: string; label?: string; kind?: string; default?: boolean }[];
+    intro?: { start: number; end: number };
+    outro?: { start: number; end: number };
+  } | null> {
+    try {
+      // 1. /resolve → inner iframe URL
+      const resolveRes = await fetch(`${playerUrl}/resolve`, {
+        headers: {
+          "User-Agent": USER_AGENT,
+          Referer: playerUrl,
+          "X-Requested-With": "ZenPlayer",
+        },
+      });
+      if (!resolveRes.ok) return null;
+      const resolveJson = (await resolveRes.json()) as { url?: string };
+      const innerUrl = resolveJson?.url;
+      if (!innerUrl) return null;
+
+      // 2. Inner page → data-id
+      const pageRes = await fetch(innerUrl, {
+        headers: { "User-Agent": USER_AGENT, Referer: `${this.site}/` },
+      });
+      if (!pageRes.ok) return null;
+      const pageHtml = await pageRes.text();
+      const idMatch =
+        /data-id\s*=\s*"(\d+)"/i.exec(pageHtml) ||
+        /id="megaplay-player"[^>]*data-id\s*=\s*"(\d+)"/i.exec(pageHtml);
+      const fileId = idMatch?.[1];
+      if (!fileId) return null;
+
+      // 3. getSources → m3u8 + tracks + intro/outro
+      const srcRes = await fetch(
+        `https://megaplay.buzz/stream/getSources?id=${fileId}`,
+        {
+          headers: {
+            "User-Agent": USER_AGENT,
+            Referer: innerUrl,
+            "X-Requested-With": "XMLHttpRequest",
+          },
+        },
+      );
+      if (!srcRes.ok) return null;
+      const data = (await srcRes.json()) as any;
+      const file: string | undefined = data?.sources?.file;
+      if (!file) return null;
+
+      const tracks = Array.isArray(data.tracks) ? data.tracks : [];
+      const subtitles = tracks
+        .filter((tr: any) => tr?.kind !== "thumbnails" && typeof tr?.file === "string")
+        .map((tr: any) => ({
+          file: tr.file as string,
+          label: typeof tr.label === "string" ? tr.label : undefined,
+          kind: typeof tr.kind === "string" ? tr.kind : undefined,
+          default: !!tr.default,
+        }));
+
+      const intro =
+        data?.intro && typeof data.intro.start === "number"
+          ? { start: this.toInt(data.intro.start), end: this.toInt(data.intro.end) }
+          : undefined;
+      const outro =
+        data?.outro && typeof data.outro.start === "number"
+          ? { start: this.toInt(data.outro.start), end: this.toInt(data.outro.end) }
+          : undefined;
+
+      return { m3u8: file, subtitles, intro, outro };
+    } catch (err) {
+      Logger.error(`Anizen resolvePlayer error for ${playerUrl}: ${String(err)}`);
+      return null;
+    }
+  }
+
   static async fetchEpisodeServers(
     episodeId: string,
     subOrDub: "softsub" | "dub" | "hardsub" = "hardsub",
@@ -380,12 +534,15 @@ export class Anizen {
     const suffix = t === "dub" ? " (Dub)" : " (HardSub)";
     const results: AnizenStreamSource[] = [];
     const seen = new Set<string>();
-    console.log(`Anizen streams for ${episodeId} (${t}): found ${servers.length} servers, link: ${link ? "yes" : "no"}`);
+
+    let resolvedIntro: [number, number] | null = null;
+    let resolvedOutro: [number, number] | null = null;
+
     if (link?.link?.file) {
       const name = `Anizen ${link.server ?? "primary"}${suffix}`;
       seen.add(link.server ?? "");
-      const tracks = Array.isArray(link.tracks) ? link.tracks : [];
-      const subtitles = tracks
+      const upstreamTracks = Array.isArray(link.tracks) ? link.tracks : [];
+      const upstreamSubs = upstreamTracks
         .filter((tr: any) => tr?.kind !== "thumbnails")
         .map((tr: any) => ({
           url: tr.file ?? tr.url ?? undefined,
@@ -393,16 +550,51 @@ export class Anizen {
           type: t === "dub" ? "none" : "soft",
         }));
 
+      const file = link.link.file as string;
+      const isAlreadyHls = /\.m3u8(\?|$)/i.test(file);
 
-
-
-      results.push({
-        name,
-        iframe: link.link.file,
-        sources: [{ file: link.link.file, type: link.link.type ?? "hls" }],
-        subtitles,
-        download: null,
-      });
+      // If the upstream "file" is really a /player/ iframe, resolve the chain
+      // and serve the real m3u8. Client (Android/ExoPlayer) injects Referer
+      // directly — no server-side proxying needed.
+      if (!isAlreadyHls && this.isPlayerUrl(file)) {
+        const resolved = await this.resolvePlayer(file);
+        if (resolved) {
+          const resolvedSubs = resolved.subtitles.map((tr) => ({
+            url: tr.file,
+            lang: tr.label ?? tr.kind ?? undefined,
+            type: t === "dub" ? "none" : "soft",
+          }));
+          const subtitles = resolvedSubs.length > 0 ? resolvedSubs : upstreamSubs;
+          results.push({
+            name,
+            iframe: file,
+            sources: [{ file: resolved.m3u8, type: "hls" }],
+            subtitles,
+            download: null,
+            headers: { Referer: this.PLAYER_REFERER },
+          });
+          if (resolved.intro) resolvedIntro = [resolved.intro.start, resolved.intro.end];
+          if (resolved.outro) resolvedOutro = [resolved.outro.start, resolved.outro.end];
+        } else {
+          // Resolver failed (network/upstream change); surface the iframe so
+          // the client at least has something to render.
+          results.push({
+            name,
+            iframe: file,
+            sources: [{ file, type: "iframe" }],
+            subtitles: upstreamSubs,
+            download: null,
+          });
+        }
+      } else {
+        results.push({
+          name,
+          iframe: file,
+          sources: [{ file, type: isAlreadyHls ? (link.link.type ?? "hls") : "iframe" }],
+          subtitles: upstreamSubs,
+          download: null,
+        });
+      }
     }
 
     for (const s of servers) {
@@ -420,13 +612,21 @@ export class Anizen {
       });
     }
 
+    // Prefer the upstream's intro/outro when present; fall back to whatever
+    // the megaplay resolver returned (often the only source of skip markers).
     const introArr = Array.isArray(link?.intro) ? link.intro : null;
     const outroArr = Array.isArray(link?.outro) ? link.outro : null;
+    const intro: [number, number] | null = introArr
+      ? [this.toInt(introArr[0]), this.toInt(introArr[1])]
+      : resolvedIntro;
+    const outro: [number, number] | null = outroArr
+      ? [this.toInt(outroArr[0]), this.toInt(outroArr[1])]
+      : resolvedOutro;
     return {
       isDub: t === "dub",
-      results: [],
-      ...(introArr ? { intro: [this.toInt(introArr[0]), this.toInt(introArr[1])] as [number, number] } : {}),
-      ...(outroArr ? { outro: [this.toInt(outroArr[0]), this.toInt(outroArr[1])] as [number, number] } : {}),
+      results,
+      ...(intro ? { intro } : {}),
+      ...(outro ? { outro } : {}),
     };
   }
 }

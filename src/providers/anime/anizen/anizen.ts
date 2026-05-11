@@ -380,7 +380,7 @@ export class Anizen {
     const suffix = t === "dub" ? " (Dub)" : " (HardSub)";
     const results: AnizenStreamSource[] = [];
     const seen = new Set<string>();
-
+    console.log(`Anizen streams for ${episodeId} (${t}): found ${servers.length} servers, link: ${link ? "yes" : "no"}`);
     if (link?.link?.file) {
       const name = `Anizen ${link.server ?? "primary"}${suffix}`;
       seen.add(link.server ?? "");
@@ -392,6 +392,10 @@ export class Anizen {
           lang: tr.label ?? tr.kind ?? undefined,
           type: t === "dub" ? "none" : "soft",
         }));
+
+
+
+
       results.push({
         name,
         iframe: link.link.file,
@@ -406,6 +410,7 @@ export class Anizen {
       const sName = s.serverName ?? s.server_name ?? "unknown";
       if (seen.has(sName)) continue;
       seen.add(sName);
+
       results.push({
         name: `Anizen ${sName}${suffix}`,
         iframe: s.embed,
@@ -419,7 +424,7 @@ export class Anizen {
     const outroArr = Array.isArray(link?.outro) ? link.outro : null;
     return {
       isDub: t === "dub",
-      results,
+      results: [],
       ...(introArr ? { intro: [this.toInt(introArr[0]), this.toInt(introArr[1])] as [number, number] } : {}),
       ...(outroArr ? { outro: [this.toInt(outroArr[0]), this.toInt(outroArr[1])] as [number, number] } : {}),
     };

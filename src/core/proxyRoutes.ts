@@ -27,6 +27,7 @@ export const proxyRoutes = new Elysia({ prefix: "/proxy" })
           "/proxy/ts-segment?url={url}&headers={encodedHeaders}",
           "/proxy/fetch?url={url}&headers={encodedHeaders}",
           "/proxy/mp4-proxy?url={url}&headers=",
+          "/proxy/embed?url={vidnest player url}",
         ],
       };
     },
@@ -34,6 +35,62 @@ export const proxyRoutes = new Elysia({ prefix: "/proxy" })
       detail: {
         tags: ["proxy"],
         summary: "Proxy API Overview",
+      },
+    },
+  )
+
+  // ─── Iframe embed wrapper ────────────────────────────────────────────────────
+  // vidnest's player pages are built to run *inside an iframe* (their JS branches
+  // on window.self !== window.top and rejects sandboxed frames). Loaded as a
+  // webview's top-level page they render a "404" fallback. This serves a plain
+  // static HTML page that frames the player, so a webview pointed here gets the
+  // working player with no app changes. Host-restricted to vidnest.fun.
+  .get(
+    "/embed",
+    ({ query: { url } }) => {
+      if (!url) return new Response("Missing url query param", { status: 400 });
+
+      let target: URL;
+      try {
+        target = new URL(url);
+      } catch {
+        return new Response("Invalid url", { status: 400 });
+      }
+
+      const host = target.hostname.toLowerCase();
+      const allowed = host === "vidnest.fun" || host.endsWith(".vidnest.fun");
+      if (target.protocol !== "https:" || !allowed) {
+        return new Response("URL host not allowed", { status: 403 });
+      }
+
+      // target.href is parsed/normalized; escape the only char that could break
+      // out of the double-quoted src attribute. No `sandbox` attr — vidnest's
+      // player refuses to run inside a sandboxed frame.
+      const safe = target.href.replace(/"/g, "%22");
+      const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Player</title>
+<style>html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden}iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style>
+</head>
+<body>
+<iframe src="${safe}" frameborder="0" scrolling="no" allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>
+</body>
+</html>`;
+
+      return new Response(html, {
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "public, max-age=3600",
+        },
+      });
+    },
+    {
+      detail: {
+        tags: ["proxy"],
+        summary: "Iframe wrapper for vidnest player URLs (for webview embedding)",
       },
     },
   )

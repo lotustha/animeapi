@@ -34,16 +34,32 @@ export class Anivid {
   // /_next/static/chunks/1ac7e9456f1ffbf0.js). Each "server" hits a different
   // upstream behind their CDN and is enforced server-side via the Referer.
   private static VIDNEST_BACKEND = "https://new.vidnest.fun";
+  // Each vidnest "server" proxies a different upstream. Two distinct Referers
+  // are in play: `backendReferer` is what new.vidnest.fun enforces to hand back
+  // the (encrypted) source list; `cdnReferer` is what the *resolved* m3u8 CDN
+  // hard-checks — a different host (verified May 2026):
+  //   hianime  → cdn.mewstream.buzz / streamzone  (needs Referer megaplay.buzz)
+  //   aniwave  → burntburst CDN                    (needs Referer aniwaves.ru)
+  // hianime is primary: it returns subtitles + intro/outro and is the path the
+  // live player now uses. anitaku is frequently 502, so it's the last resort.
   private static VIDNEST_SERVERS = [
     {
-      name: "anitaku",
-      referer: "https://anitaku.to",
-      path: (id: string, ep: number, t: "sub" | "dub") => `/anitaku/${id}/${ep}/${t}/hd-2`,
+      name: "hianime",
+      backendReferer: "https://aniwaves.ru/",
+      cdnReferer: "https://megaplay.buzz/",
+      path: (id: string, ep: number, t: "sub" | "dub") => `/hianime/anime/${id}/${ep}/${t}`,
     },
     {
-      name: "aniwave_hls",
-      referer: "https://aniwaves.ru/",
+      name: "aniwave",
+      backendReferer: "https://aniwaves.ru/",
+      cdnReferer: "https://aniwaves.ru/",
       path: (id: string, ep: number, t: "sub" | "dub") => `/aniwave_hls/${id}/${ep}/${t}`,
+    },
+    {
+      name: "anitaku",
+      backendReferer: "https://anitaku.to",
+      cdnReferer: "https://anitaku.to/",
+      path: (id: string, ep: number, t: "sub" | "dub") => `/anitaku/${id}/${ep}/${t}/hd-2`,
     },
   ] as const;
 
@@ -580,7 +596,7 @@ export class Anivid {
         title: `Episode ${i}`,
         isFiller: false,
         isSubbed: true,
-        isDubbed: false,
+        isDubbed: true,
         url: `${this.embed}/anime/${anilistId}/${i}/sub`,
       });
     }
@@ -710,8 +726,8 @@ export class Anivid {
       malId: media.idMal != null ? String(media.idMal) : undefined,
       anilistId: aId,
       hasSub: true,
-      hasDub: false,
-      subOrDub: "sub",
+      hasDub: true,
+      subOrDub: "both",
       genres: Array.isArray(media.genres) ? media.genres : [],
       recommendations,
       relations,
@@ -754,7 +770,9 @@ export class Anivid {
     referer: string;
     quality?: string;
     m3u8: string;
-    subtitles: string[];
+    subtitles: { url: string; lang?: string }[];
+    intro?: [number, number];
+    outro?: [number, number];
   } | null> {
     for (const srv of this.VIDNEST_SERVERS) {
       try {
@@ -763,8 +781,8 @@ export class Anivid {
           headers: {
             "User-Agent": USER_AGENT,
             Accept: "application/json, text/plain, */*",
-            Referer: srv.referer,
-            Origin: srv.referer.replace(/\/$/, ""),
+            Referer: srv.backendReferer,
+            Origin: srv.backendReferer.replace(/\/$/, ""),
           },
         });
         if (!res.ok) {
@@ -778,21 +796,48 @@ export class Anivid {
             ? payload.multiSrc
             : [];
         if (!sources.length) continue;
-        // SPA's preference order: HD-2 > HD > first url-bearing entry.
+        // hianime returns {file} (no server/quality); anitaku returns
+        // {url, server:"HD-2", quality, subtitles}. Accept either url shape.
         const picked =
-          sources.find((s: any) => s?.server === "HD-2" && typeof s?.url === "string") ||
-          sources.find((s: any) => s?.quality === "HD" && typeof s?.url === "string") ||
-          sources.find((s: any) => typeof s?.url === "string");
-        if (!picked?.url) continue;
-        const subs: string[] = Array.isArray(picked.subtitles)
-          ? picked.subtitles.filter((u: any): u is string => typeof u === "string" && u.length > 0)
-          : [];
+          sources.find((s: any) => s?.server === "HD-2" && (s?.url || s?.file)) ||
+          sources.find((s: any) => s?.quality === "HD" && (s?.url || s?.file)) ||
+          sources.find((s: any) => s?.url || s?.file);
+        const m3u8: string | undefined = picked?.url || picked?.file;
+        if (!m3u8) continue;
+
+        // Subtitles: hianime exposes them on payload.tracks ({file,label,kind}),
+        // anitaku on picked.subtitles (string[] or {file,label}).
+        const rawTracks: any[] =
+          Array.isArray(payload?.tracks) && payload.tracks.length
+            ? payload.tracks
+            : Array.isArray(picked.subtitles)
+              ? picked.subtitles
+              : [];
+        const subtitles = rawTracks
+          .map((tr: any) => {
+            if (typeof tr === "string") return tr ? { url: tr } : null;
+            if (tr?.kind === "thumbnails" || typeof tr?.file !== "string") return null;
+            return { url: tr.file as string, lang: typeof tr.label === "string" ? tr.label : undefined };
+          })
+          .filter((s: any): s is { url: string; lang?: string } => s !== null);
+
+        const intro =
+          payload?.intro && typeof payload.intro.start === "number"
+            ? ([this.toInt(payload.intro.start), this.toInt(payload.intro.end)] as [number, number])
+            : undefined;
+        const outro =
+          payload?.outro && typeof payload.outro.start === "number"
+            ? ([this.toInt(payload.outro.start), this.toInt(payload.outro.end)] as [number, number])
+            : undefined;
+
         return {
           server: srv.name,
-          referer: srv.referer,
+          referer: srv.cdnReferer,
           quality: typeof picked.quality === "string" ? picked.quality : undefined,
-          m3u8: picked.url,
-          subtitles: subs,
+          m3u8,
+          subtitles,
+          intro,
+          outro,
         };
       } catch (err) {
         Logger.error(`Anivid ${srv.name} resolve error: ${String(err)}`);
@@ -817,8 +862,8 @@ export class Anivid {
           name: `anivid vidnest ${vid.server}${suffix}`.toLowerCase(),
           url: vid.m3u8,
           isDub: t === "dub",
-          intro: { start: 0, end: 0 },
-          outro: { start: 0, end: 0 },
+          intro: { start: vid.intro?.[0] ?? 0, end: vid.intro?.[1] ?? 0 },
+          outro: { start: vid.outro?.[0] ?? 0, end: vid.outro?.[1] ?? 0 },
           headers: { Referer: vid.referer },
         },
       ];
@@ -848,9 +893,9 @@ export class Anivid {
 
     const vid = await this.resolveVidnestSource(parsed.anilistId, parsed.ep, t);
     if (vid) {
-      const subtitles = vid.subtitles.map((u, i) => ({
-        url: u,
-        lang: `Subtitle ${i + 1}`,
+      const subtitles = vid.subtitles.map((s, i) => ({
+        url: s.url,
+        lang: s.lang ?? `Subtitle ${i + 1}`,
         type: t === "dub" ? "none" : "soft",
       }));
       // The decrypted vidnest payload usually returns an .m3u8, but other
@@ -867,7 +912,12 @@ export class Anivid {
         download: null,
         headers: { Referer: vid.referer },
       };
-      return { isDub: t === "dub", results: [result] };
+      return {
+        isDub: t === "dub",
+        results: [result],
+        ...(vid.intro ? { intro: vid.intro } : {}),
+        ...(vid.outro ? { outro: vid.outro } : {}),
+      };
     }
 
     // Iframe fallback when the vidnest backend can't be reached.

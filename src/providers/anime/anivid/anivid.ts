@@ -360,6 +360,144 @@ export class Anivid {
     return this.browse({ sort: ["POPULARITY_DESC"], genre_in: [genre] }, page);
   }
 
+  // ─── Anikai-parity browse routes ──────────────────────────────────────────────
+  // AniList has no per-site catalog, so these map anikai's site-scraped feeds to
+  // the closest AniList query. Format feeds sort by popularity; "completed" and
+  // "new-releases" sort by end/start date; "recent-added" by newest catalog id.
+
+  static movies(page = 1) {
+    return this.browse({ sort: ["POPULARITY_DESC"], format: "MOVIE" }, page);
+  }
+  static tv(page = 1) {
+    return this.browse({ sort: ["POPULARITY_DESC"], format: "TV" }, page);
+  }
+  static ova(page = 1) {
+    return this.browse({ sort: ["POPULARITY_DESC"], format: "OVA" }, page);
+  }
+  static ona(page = 1) {
+    return this.browse({ sort: ["POPULARITY_DESC"], format: "ONA" }, page);
+  }
+  static specials(page = 1) {
+    return this.browse({ sort: ["POPULARITY_DESC"], format: "SPECIAL" }, page);
+  }
+  static latestCompleted(page = 1) {
+    return this.browse({ sort: ["END_DATE_DESC"], status_in: ["FINISHED"] }, page);
+  }
+  static newReleases(page = 1) {
+    return this.browse({ sort: ["START_DATE_DESC"], status_in: ["RELEASING", "FINISHED"] }, page);
+  }
+  static recentlyAdded(page = 1) {
+    return this.browse({ sort: ["ID_DESC"] }, page);
+  }
+
+  // Recently aired episodes (anikai's recent-episodes). Pulls the airing
+  // schedule backwards from "now" and maps each entry to a series card,
+  // deduping repeat series and stamping the just-aired episode number.
+  static async recentEpisodes(page = 1): Promise<AnividPagedResult<AnividSearchItem>> {
+    const p = page > 0 ? page : 1;
+    const now = Math.floor(Date.now() / 1000);
+    const data = await this.gql<{ Page: any }>(
+      `query ($page: Int, $perPage: Int, $now: Int) {
+        Page(page: $page, perPage: $perPage) {
+          pageInfo { total currentPage hasNextPage lastPage perPage }
+          airingSchedules(airingAt_lesser: $now, sort: TIME_DESC) {
+            episode
+            media { ${Anivid.MEDIA_FIELDS} isAdult }
+          }
+        }
+      }`,
+      { page: p, perPage: this.PER_PAGE, now },
+    );
+    const pageData = data?.Page;
+    if (!pageData) return { currentPage: 0, hasNextPage: false, totalPages: 0, results: [] };
+    const scheds: any[] = Array.isArray(pageData.airingSchedules) ? pageData.airingSchedules : [];
+    const info = pageData.pageInfo ?? {};
+
+    const seen = new Set<string>();
+    const results: AnividSearchItem[] = [];
+    for (const s of scheds) {
+      const m = s?.media;
+      if (!m?.id || m.isAdult) continue;
+      const key = String(m.id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const card = this.mapMedia(m);
+      if (!card) continue;
+      const epNum = this.toInt(s.episode);
+      if (epNum > 0) {
+        card.episodes = epNum;
+        card.sub = epNum;
+      }
+      results.push(card);
+    }
+
+    const currentPage = this.toInt(info.currentPage) || (results.length ? p : 0);
+    const totalPages = this.toInt(info.lastPage) || (results.length ? p : 0);
+    const hasNextPage = typeof info.hasNextPage === "boolean" ? info.hasNextPage : false;
+    return {
+      currentPage: results.length === 0 ? 0 : currentPage,
+      hasNextPage,
+      totalPages: results.length === 0 ? 0 : totalPages,
+      results,
+    };
+  }
+
+  // Spotlight (anikai's featured carousel) — top trending titles with banner
+  // art + synopsis, shaped like anizen/animekai spotlight entries.
+  static async spotlight(): Promise<any[]> {
+    const data = await this.gql<{ Page: any }>(
+      `query {
+        Page(perPage: 10) {
+          media(sort: [TRENDING_DESC, POPULARITY_DESC], type: ANIME, isAdult: false) {
+            id
+            title { romaji english native }
+            format
+            genres
+            averageScore
+            season
+            seasonYear
+            startDate { year }
+            bannerImage
+            coverImage { large extraLarge }
+            description(asHtml: false)
+            episodes
+            nextAiringEpisode { episode }
+          }
+        }
+      }`,
+      {},
+    );
+    const list: any[] = Array.isArray(data?.Page?.media) ? data.Page.media : [];
+    return list
+      .map((m) => {
+        if (!m?.id) return null;
+        const { title, jp } = this.pickTitle(m.title);
+        const total =
+          this.toInt(m.episodes) || Math.max(0, this.toInt(m.nextAiringEpisode?.episode) - 1);
+        const releaseDate =
+          m.season && m.seasonYear
+            ? `${String(m.season).charAt(0) + String(m.season).slice(1).toLowerCase()} ${m.seasonYear}`
+            : m.startDate?.year
+              ? String(m.startDate.year)
+              : "";
+        return {
+          id: String(m.id),
+          title,
+          japaneseTitle: jp,
+          banner: m.bannerImage || m.coverImage?.extraLarge || null,
+          image: m.coverImage?.extraLarge || m.coverImage?.large || undefined,
+          url: `${this.site}/anime/${m.id}`,
+          type: m.format ?? "",
+          genres: Array.isArray(m.genres) ? m.genres : [],
+          releaseDate,
+          sub: total,
+          dub: 0,
+          description: this.stripHtml(m.description),
+        };
+      })
+      .filter((x) => x !== null);
+  }
+
   private static currentSeason(): { season: string; seasonYear: number } {
     const now = new Date();
     const month = now.getUTCMonth() + 1;

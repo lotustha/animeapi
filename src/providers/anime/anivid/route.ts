@@ -101,6 +101,145 @@ export const anividRoutes = new Elysia({ prefix: "/anivid" })
     return results;
   })
 
+  // ─── Spotlight ─────────────────────────────────────────────────────────────
+  .get("/spotlight", async () => {
+    const key = `anivid:v1:spotlight`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return { results: JSON.parse(cachedData) };
+
+    const results = await Anivid.spotlight();
+    if (results && results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 3600);
+    }
+    return { results };
+  })
+
+  // ─── Recent Episodes (recently aired) ───────────────────────────────────────
+  .get("/recent-episodes", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `anivid:v1:recent-episodes:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Anivid.recentEpisodes(page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 600);
+    }
+    return results;
+  })
+
+  // ─── Recently Added ──────────────────────────────────────────────────────────
+  .get("/recent-added", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `anivid:v1:recent-added:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Anivid.recentlyAdded(page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 3600);
+    }
+    return results;
+  })
+
+  // ─── Latest Completed ──────────────────────────────────────────────────────
+  .get("/completed", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `anivid:v1:completed:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Anivid.latestCompleted(page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 21600);
+    }
+    return results;
+  })
+
+  // ─── New Releases ──────────────────────────────────────────────────────────
+  .get("/new-releases", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `anivid:v1:new-releases:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Anivid.newReleases(page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 21600);
+    }
+    return results;
+  })
+
+  // ─── Movies ────────────────────────────────────────────────────────────────
+  .get("/movies", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `anivid:v1:movies:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Anivid.movies(page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 86400);
+    }
+    return results;
+  })
+
+  // ─── TV ────────────────────────────────────────────────────────────────────
+  .get("/tv", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `anivid:v1:tv:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Anivid.tv(page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 86400);
+    }
+    return results;
+  })
+
+  // ─── OVA ───────────────────────────────────────────────────────────────────
+  .get("/ova", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `anivid:v1:ova:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Anivid.ova(page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 86400);
+    }
+    return results;
+  })
+
+  // ─── ONA ───────────────────────────────────────────────────────────────────
+  .get("/ona", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `anivid:v1:ona:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Anivid.ona(page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 86400);
+    }
+    return results;
+  })
+
+  // ─── Specials ──────────────────────────────────────────────────────────────
+  .get("/specials", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `anivid:v1:specials:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Anivid.specials(page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 86400);
+    }
+    return results;
+  })
+
   // ─── Schedule ──────────────────────────────────────────────────────────────
   .get("/schedule/:date", async ({ params: { date } }) => {
     const key = `anivid:v1:schedule:${date}`;

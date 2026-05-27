@@ -8,6 +8,7 @@ import { anigoRoutes } from "./anigo/route.js";
 import { hianimeRoutes } from "./hianime/route.js";
 import { anizenRoutes } from "./anizen/route.js";
 import { anividRoutes } from "./anivid/route.js";
+import { anikotoRoutes } from "./anikoto/route.js";
 
 export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(animepaheRoutes)
@@ -18,6 +19,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(hianimeRoutes)
   .use(anizenRoutes)
   .use(anividRoutes)
+  .use(anikotoRoutes)
 
   // ─── Overview Endpoint ────────────────────────────────────────────────────────
   .get(
@@ -34,6 +36,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
         "hianime",
         "anizen",
         "anivid",
+        "anikoto",
       ],
       endpoints: {
         animepahe: [
@@ -156,6 +159,28 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/anivid/info/:id               → Full title details + episodes (id = AniList ID)",
           "GET /anime/anivid/watch/:episodeId       → vidnest.fun iframe (query: type=sub|dub)",
           "GET /anime/anivid/servers/:episodeId     → Episode servers (query: type)",
+        ],
+
+        anikoto: [
+          "GET /anime/anikoto/search/:query          → Paginated search",
+          "GET /anime/anikoto/spotlight              → Spotlight anime",
+          "GET /anime/anikoto/schedule/:date         → Airing schedule (YYYY-MM-DD)",
+          "GET /anime/anikoto/suggestions/:query     → Search suggestions",
+          "GET /anime/anikoto/recent-episodes        → Recently updated episodes",
+          "GET /anime/anikoto/recent-added           → Recently added series",
+          "GET /anime/anikoto/completed              → Latest completed series",
+          "GET /anime/anikoto/new-releases           → New releases",
+          "GET /anime/anikoto/most-viewed            → Most viewed series",
+          "GET /anime/anikoto/movies                 → Movies",
+          "GET /anime/anikoto/tv                     → TV Series",
+          "GET /anime/anikoto/ova                    → OVAs",
+          "GET /anime/anikoto/ona                    → ONAs",
+          "GET /anime/anikoto/specials               → Specials",
+          "GET /anime/anikoto/genres                 → Available genres",
+          "GET /anime/anikoto/genre/:genre           → Browse by genre",
+          "GET /anime/anikoto/info/:id               → Full title details + episodes",
+          "GET /anime/anikoto/watch/:episodeId       → Decrypted m3u8 sources + Referer header (query: type=sub|dub)",
+          "GET /anime/anikoto/servers/:episodeId     → Episode servers (query: type)",
         ],
       },
     }),

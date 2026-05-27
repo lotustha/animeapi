@@ -92,8 +92,13 @@ export interface AnividServer {
 
 export interface AnividStreamSource {
   name: string;
+  // /proxy/embed wrapper URL — an HTML page on our server that frames the
+  // vidnest player, ready to load directly in a webview.
   iframe: string;
-  sources: { file: string; type: string }[];
+  // file = raw m3u8 (CDN serves the client directly; player must send
+  // headers.Referer). proxy = same stream via our m3u8-proxy (Referer injected
+  // server-side, no client headers needed, but uses our bandwidth).
+  sources: { file: string; type: string; proxy?: string }[];
   subtitles: { url?: string; lang?: string; type: string }[];
   download: string | null;
   // HTTP headers the client MUST send when fetching `sources[].file` and its

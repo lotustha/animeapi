@@ -1,4 +1,6 @@
+import { SERVER_ORIGIN } from "../../../core/config.js";
 import { Logger } from "../../../core/logger.js";
+import { proxifySource } from "../../../core/proxy.js";
 import { anilist as anilistSite, anilist_graphql, jikan_api, vidnest } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
 import { decryptCipherResponse } from "./scraper/decrypt.js";
@@ -758,6 +760,12 @@ export class Anivid {
     return `${this.embed}/anime/${anilistId}/${ep}/${type}`;
   }
 
+  // Wrap a vidnest player URL in our /proxy/embed page so it can be loaded as a
+  // webview's top-level URL (vidnest only renders inside an iframe).
+  private static embedUrl(playerUrl: string): string {
+    return `${SERVER_ORIGIN.replace(/\/$/, "")}/proxy/embed?url=${encodeURIComponent(playerUrl)}`;
+  }
+
   // Resolve a real m3u8 by hitting new.vidnest.fun and running the response
   // through the custom-base64 decoder. Tries each server in order until one
   // returns sources; returns null if all fail (caller falls back to iframe).
@@ -902,12 +910,23 @@ export class Anivid {
       // servers occasionally hand back an iframe page. Pick the type from
       // the URL shape rather than assuming hls.
       const isHls = /\.m3u8(\?|$)/i.test(vid.m3u8);
-      // Return raw URL + headers. Native Android players (ExoPlayer/Media3)
-      // inject Referer directly — no server-side proxy bandwidth needed.
+      // Hybrid delivery. The CDN hard-checks Referer on the master, the nested
+      // variant playlists, AND the .ts segments (which live on a different host):
+      //  • sources[].file  = RAW m3u8 → CDN streams straight to the device
+      //    (scales). Player must send headers.Referer on EVERY request.
+      //  • sources[].proxy = same stream via our m3u8-proxy with the Referer
+      //    injected server-side → no client headers, but uses our bandwidth.
+      //  • iframe = /proxy/embed wrapper page, ready to drop into a webview.
       const result: AnividStreamSource = {
         name: `Anivid VidNest ${vid.server}${vid.quality ? ` ${vid.quality}` : ""}${suffix}`,
-        iframe: this.iframeUrl(parsed.anilistId, parsed.ep, t),
-        sources: [{ file: vid.m3u8, type: isHls ? "hls" : "iframe" }],
+        iframe: this.embedUrl(this.iframeUrl(parsed.anilistId, parsed.ep, t)),
+        sources: [
+          {
+            file: vid.m3u8,
+            type: isHls ? "hls" : "iframe",
+            ...(isHls ? { proxy: proxifySource(vid.m3u8, { Referer: vid.referer }) } : {}),
+          },
+        ],
         subtitles,
         download: null,
         headers: { Referer: vid.referer },
@@ -924,7 +943,7 @@ export class Anivid {
     const url = this.iframeUrl(parsed.anilistId, parsed.ep, t);
     const result: AnividStreamSource = {
       name: `Anivid VidNest Iframe${suffix}`,
-      iframe: url,
+      iframe: this.embedUrl(url),
       sources: [{ file: url, type: "iframe" }],
       subtitles: [],
       download: null,

@@ -303,8 +303,9 @@ export const animelokRoutes = new Elysia({ prefix: "/animelok" })
   })
 
   // ─── Watch / Stream Sources ────────────────────────────────────────────────
-  // `type` selects the audio language: sub|dub (aliases for japanese|english),
-  // or hindi|tamil|telugu|malayalam. Defaults to sub (Japanese).
+  // No `type` → every audio language in one response (each result tagged with
+  // `lang`). Pass `type` to filter: sub|dub (= japanese|english), or
+  // hindi|tamil|telugu|malayalam.
   .get("/watch/:episodeId", async ({ params: { episodeId }, query: qs, set }) => {
     if (!episodeId) {
       set.status = 400;
@@ -312,7 +313,7 @@ export const animelokRoutes = new Elysia({ prefix: "/animelok" })
     }
 
     const type = qs?.type as string | undefined;
-    const key = `animelok:v1:watch:${episodeId}:${type ?? "sub"}`;
+    const key = `animelok:v1:watch:${episodeId}:${type ?? "all"}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 

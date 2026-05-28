@@ -8,7 +8,7 @@ import {
 } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
 import { buildFullSlug } from "./scraper/slug.js";
-import { scrapeStreamAllLangs, type AllLangsResult } from "./scraper/stream.js";
+import { scrapeStreamAllLangs, type AllLangsResult, type LangTrack } from "./scraper/stream.js";
 import type {
   AnimelokEpisode,
   AnimelokInfo,
@@ -812,39 +812,26 @@ export class Animelok {
     return null;
   }
 
-  static async streams(episodeId: string, type?: string): Promise<AnimelokStreamResponse> {
-    const parsed = this.parseEpisodeId(episodeId);
-    if (!parsed) return { isDub: false, results: [] };
-
-    const lang = this.langForType(type);
-    const isDub = lang !== "JAPANESE";
-    const payload = await this.resolveStreams(parsed.anilistId, parsed.ep);
-    if (!payload) return { isDub, results: [], languages: [] };
-
-    const languages = payload.languages.map((l) => l.toLowerCase());
-    const track = payload.tracks[lang];
-    if (!track) return { isDub, results: [], languages };
-
-    const langLower = lang.toLowerCase();
-    const display = this.titleCase(lang);
-    // animelok's own SPA player page for this episode — used as the iframe for
-    // direct-HLS results (which carry no embed of their own) so the field is
-    // always populated. Falls back to the first embed if the slug is unknown.
-    const watchPage = this.watchUrl(parsed.anilistId, parsed.ep);
+  // Build the anikai-shaped results for one language track.
+  private static buildLangResults(
+    track: LangTrack,
+    langUpper: string,
+    watchPage: string,
+    subtitles: { url?: string; lang?: string; type: string }[],
+  ): AnimelokStreamSource[] {
+    const langLower = langUpper.toLowerCase();
+    const display = this.titleCase(langUpper);
+    // animelok's own SPA player page — used as the iframe for direct-HLS results
+    // (which carry no embed of their own). Falls back to the first embed.
     const directIframe = watchPage || track.embeds[0]?.url || "";
-    const subtitles = payload.subtitles.map((s) => ({
-      url: s.url,
-      lang: s.lang ?? "English",
-      type: "soft",
-    }));
-    const results: AnimelokStreamSource[] = [];
+    const out: AnimelokStreamSource[] = [];
 
     for (const g of track.servers) {
       // The CDN hard-checks Referer (pahe → kwik.cx). `file` is the raw m3u8 the
       // client plays directly with headers.Referer; `proxy` injects that Referer
       // server-side so a header-less client still works.
       const referer = this.refererFor(g.server);
-      results.push({
+      out.push({
         name: `Animelok ${g.server} (${display})`,
         iframe: directIframe,
         sources: g.streams.map((s) => {
@@ -864,7 +851,7 @@ export class Animelok {
     }
 
     for (const e of track.embeds) {
-      results.push({
+      out.push({
         name: `Animelok ${e.server} (${display})`,
         iframe: e.url,
         sources: [{ file: e.url, type: "iframe" }],
@@ -874,6 +861,39 @@ export class Animelok {
       });
     }
 
+    return out;
+  }
+
+  // Returns EVERY audio language's streams by default (each result tagged with
+  // `lang`). Pass ?type= to filter: sub|dub (= japanese|english) or
+  // hindi|tamil|telugu|malayalam. `type=all` is also the everything view.
+  static async streams(episodeId: string, type?: string): Promise<AnimelokStreamResponse> {
+    const parsed = this.parseEpisodeId(episodeId);
+    if (!parsed) return { isDub: false, results: [] };
+
+    const payload = await this.resolveStreams(parsed.anilistId, parsed.ep);
+    if (!payload) return { isDub: false, results: [], languages: [] };
+
+    const languages = payload.languages.map((l) => l.toLowerCase());
+    const watchPage = this.watchUrl(parsed.anilistId, parsed.ep);
+    const subtitles = payload.subtitles.map((s) => ({
+      url: s.url,
+      lang: s.lang ?? "English",
+      type: "soft",
+    }));
+
+    const wantAll = !type || type.toLowerCase() === "all";
+    const targetLangs = wantAll
+      ? payload.languages
+      : payload.languages.filter((l) => l === this.langForType(type));
+
+    const results: AnimelokStreamSource[] = [];
+    for (const langUpper of targetLangs) {
+      const track = payload.tracks[langUpper];
+      if (track) results.push(...this.buildLangResults(track, langUpper, watchPage, subtitles));
+    }
+
+    const isDub = wantAll ? false : this.langForType(type) !== "JAPANESE";
     return {
       isDub,
       results,

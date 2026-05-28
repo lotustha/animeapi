@@ -63,6 +63,24 @@ export const aniwavesRoutes = new Elysia({ prefix: "/aniwaves" })
     if (results?.results?.length) Cache.set(key, JSON.stringify(results), 3600);
     return results;
   })
+  .get("/newest", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `aniwaves:v1:newest:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+    const results = await Aniwaves.newest(page);
+    if (results?.results?.length) Cache.set(key, JSON.stringify(results), 3600);
+    return results;
+  })
+  .get("/ongoing", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `aniwaves:v1:ongoing:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+    const results = await Aniwaves.ongoing(page);
+    if (results?.results?.length) Cache.set(key, JSON.stringify(results), 3600);
+    return results;
+  })
   .get("/most-popular", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
     const key = `aniwaves:v1:most-popular:${page}`;
@@ -132,6 +150,15 @@ export const aniwavesRoutes = new Elysia({ prefix: "/aniwaves" })
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
     const results = await Aniwaves.specials(page);
+    if (results?.results?.length) Cache.set(key, JSON.stringify(results), 86400);
+    return results;
+  })
+  .get("/music", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `aniwaves:v1:music:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+    const results = await Aniwaves.music(page);
     if (results?.results?.length) Cache.set(key, JSON.stringify(results), 86400);
     return results;
   })

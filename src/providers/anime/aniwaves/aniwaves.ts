@@ -41,24 +41,45 @@ export class Aniwaves {
     return h;
   }
 
-  private static async getHtml(path: string): Promise<string | null> {
-    try {
-      const res = await fetch(`${this.base}${path}`, { headers: this.headers() });
-      if (!res.ok) return null;
-      return await res.text();
-    } catch (err) {
-      Logger.error(`Aniwaves getHtml ${path} error: ${String(err)}`);
-      return null;
+  // aniwaves rate-limits/bot-challenges its dynamic pages (non-200) under bursts,
+  // recovering within ~1s. One short retry absorbs that; route-level caching
+  // handles the rest.
+  private static async fetchWithRetry(
+    url: string,
+    headers: Record<string, string>,
+    label: string,
+  ): Promise<Response | null> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch(url, { headers });
+        if (res.ok) return res;
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, 700));
+          continue;
+        }
+        Logger.warn(`Aniwaves ${label} HTTP ${res.status}: ${url}`);
+      } catch (err) {
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, 700));
+          continue;
+        }
+        Logger.error(`Aniwaves ${label} error: ${String(err)}`);
+      }
     }
+    return null;
+  }
+
+  private static async getHtml(path: string): Promise<string | null> {
+    const res = await this.fetchWithRetry(`${this.base}${path}`, this.headers(), "getHtml");
+    return res ? await res.text() : null;
   }
 
   private static async getAjax<T = any>(path: string): Promise<T | null> {
+    const res = await this.fetchWithRetry(`${this.base}${path}`, this.headers(true), "getAjax");
+    if (!res) return null;
     try {
-      const res = await fetch(`${this.base}${path}`, { headers: this.headers(true) });
-      if (!res.ok) return null;
       return (await res.json()) as T;
-    } catch (err) {
-      Logger.error(`Aniwaves getAjax ${path} error: ${String(err)}`);
+    } catch {
       return null;
     }
   }
@@ -152,17 +173,25 @@ export class Aniwaves {
     page = 1,
   ): Promise<AniwavesPagedResult<AniwavesSearchItem>> {
     const p = page > 0 ? page : 1;
-    const sep = path.includes("?") ? "&" : "?";
-    const html = await this.getHtml(`${path}${sep}page=${p}`);
+    // aniwaves paginates by path (/{path}/page/{n}); ?page= just 301-redirects
+    // there, so hit it directly to avoid the extra round-trip.
+    const url = p > 1 ? `${path}/page/${p}` : path;
+    const html = await this.getHtml(url);
     if (!html) return { currentPage: 0, hasNextPage: false, totalPages: 0, results: [] };
     return this.parseListPage(html, p);
   }
 
   static recentEpisodes(page = 1) {
-    return this.browse("/recently-updated", page);
+    return this.browse("/updated", page);
   }
   static recentlyAdded(page = 1) {
-    return this.browse("/recently-added", page);
+    return this.browse("/added", page);
+  }
+  static newest(page = 1) {
+    return this.browse("/newest", page);
+  }
+  static ongoing(page = 1) {
+    return this.browse("/ongoing", page);
   }
   static mostPopular(page = 1) {
     return this.browse("/most-popular", page);
@@ -174,19 +203,22 @@ export class Aniwaves {
     return this.browse("/completed", page);
   }
   static movies(page = 1) {
-    return this.browse("/movie", page);
+    return this.browse("/type/movies", page);
   }
   static tv(page = 1) {
-    return this.browse("/tv", page);
+    return this.browse("/type/tv-series", page);
   }
   static ova(page = 1) {
-    return this.browse("/ova", page);
+    return this.browse("/type/ova", page);
   }
   static ona(page = 1) {
-    return this.browse("/ona", page);
+    return this.browse("/type/ona", page);
   }
   static specials(page = 1) {
-    return this.browse("/special", page);
+    return this.browse("/type/special", page);
+  }
+  static music(page = 1) {
+    return this.browse("/type/music", page);
   }
   static genreSearch(genre: string, page = 1) {
     if (!genre)

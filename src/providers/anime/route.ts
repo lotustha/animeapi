@@ -220,6 +220,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/animelok/info/:id               → Full title details + episodes (id = AniList ID)",
           "GET /anime/animelok/watch/:episodeId       → Multi-audio streams (query: type=sub|dub|hindi|tamil|telugu|malayalam)",
           "GET /anime/animelok/servers/:episodeId     → Episode servers, all audio languages tagged",
+          "GET /anime/animelok/player/:episodeId      → Self-hosted hls.js player page (iframe target; query: type)",
         ],
       },
     }),

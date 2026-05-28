@@ -341,4 +341,26 @@ export const animelokRoutes = new Elysia({ prefix: "/animelok" })
       Cache.set(key, JSON.stringify(servers), 7200);
     }
     return { servers };
+  })
+
+  // ─── Self-hosted Player (iframe target) ──────────────────────────────────────
+  // HTML page that plays the proxied m3u8 with hls.js. animelok's own embeds are
+  // unreliable, so direct-HLS results point their `iframe` here. ?type selects
+  // the audio language (defaults to first available).
+  .get("/player/:episodeId", async ({ params: { episodeId }, query: qs, set }) => {
+    if (!episodeId) {
+      set.status = 400;
+      return { message: "episodeId is required" };
+    }
+
+    const type = qs?.type as string | undefined;
+    const key = `animelok:v1:player:${episodeId}:${type ?? "all"}`;
+    const headers = { "content-type": "text/html; charset=utf-8" };
+
+    const cached = await Cache.get(key);
+    if (cached) return new Response(cached, { headers });
+
+    const html = await Animelok.playerPage(episodeId, type);
+    Cache.set(key, html, 7200);
+    return new Response(html, { headers });
   });

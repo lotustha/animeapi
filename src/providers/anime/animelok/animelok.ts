@@ -1,3 +1,4 @@
+import { SERVER_ORIGIN } from "../../../core/config.js";
 import { Logger } from "../../../core/logger.js";
 import { proxifySource } from "../../../core/proxy.js";
 import {
@@ -759,13 +760,12 @@ export class Animelok {
     return lang.charAt(0).toUpperCase() + lang.slice(1).toLowerCase();
   }
 
-  // animelok's episode player page: /watch/{slug}-{anilistId}-{ep}. Requires the
-  // slug resolved by resolveStreams() (memoised in workingTitle); returns "" if
-  // unknown so callers can fall back.
-  private static watchUrl(anilistId: string, ep: number): string {
-    const title = this.workingTitle.get(anilistId);
-    if (!title) return "";
-    return `${this.embed}/watch/${buildFullSlug(title, anilistId)}-${ep}`;
+  // Our self-hosted player page (hls.js over the proxied m3u8). animelok's own
+  // embeds are unreliable (short.icu is dead; zephyrflick blocks framing), so
+  // direct-HLS results point their iframe here instead.
+  private static playerUrl(episodeId: string, lang: string): string {
+    const base = SERVER_ORIGIN.replace(/\/$/, "");
+    return `${base}/anime/animelok/player/${encodeURIComponent(episodeId)}?type=${lang}`;
   }
 
   // Candidate AniList titles, English-first (verified canonical for animelok's
@@ -812,18 +812,17 @@ export class Animelok {
     return null;
   }
 
-  // Build the anikai-shaped results for one language track.
+  // Build the anikai-shaped results for one language track. `directIframe` is our
+  // self-hosted player URL for this language (direct-HLS results point there;
+  // embed results keep their own embed URL).
   private static buildLangResults(
     track: LangTrack,
     langUpper: string,
-    watchPage: string,
+    directIframe: string,
     subtitles: { url?: string; lang?: string; type: string }[],
   ): AnimelokStreamSource[] {
     const langLower = langUpper.toLowerCase();
     const display = this.titleCase(langUpper);
-    // animelok's own SPA player page — used as the iframe for direct-HLS results
-    // (which carry no embed of their own). Falls back to the first embed.
-    const directIframe = watchPage || track.embeds[0]?.url || "";
     const out: AnimelokStreamSource[] = [];
 
     for (const g of track.servers) {
@@ -875,7 +874,6 @@ export class Animelok {
     if (!payload) return { isDub: false, results: [], languages: [] };
 
     const languages = payload.languages.map((l) => l.toLowerCase());
-    const watchPage = this.watchUrl(parsed.anilistId, parsed.ep);
     const subtitles = payload.subtitles.map((s) => ({
       url: s.url,
       lang: s.lang ?? "English",
@@ -890,7 +888,9 @@ export class Animelok {
     const results: AnimelokStreamSource[] = [];
     for (const langUpper of targetLangs) {
       const track = payload.tracks[langUpper];
-      if (track) results.push(...this.buildLangResults(track, langUpper, watchPage, subtitles));
+      if (!track) continue;
+      const iframe = this.playerUrl(episodeId, langUpper.toLowerCase());
+      results.push(...this.buildLangResults(track, langUpper, iframe, subtitles));
     }
 
     const isDub = wantAll ? false : this.langForType(type) !== "JAPANESE";
@@ -948,5 +948,57 @@ export class Animelok {
       }
     }
     return servers;
+  }
+
+  // ─── Self-hosted player ───────────────────────────────────────────────────────
+
+  // HTML player page served at /anime/animelok/player/:episodeId — plays the
+  // proxied m3u8 with hls.js (no client headers needed). Used as the iframe for
+  // direct-HLS results, since animelok's own embeds are unreliable.
+  static async playerPage(episodeId: string, type?: string): Promise<string> {
+    const res = await this.streams(episodeId, type);
+    let url = "";
+    for (const r of res.results) {
+      const s =
+        r.sources.find((x) => x.proxy) ??
+        r.sources.find((x) => x.type === "hls" || x.type === "mp4");
+      if (s) {
+        url = s.proxy ?? s.file;
+        break;
+      }
+    }
+    return this.buildPlayerHtml(url);
+  }
+
+  private static buildPlayerHtml(m3u8: string): string {
+    if (!m3u8) {
+      return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Animelok Player</title></head><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#000;color:#bbb;font-family:system-ui,sans-serif">No playable stream for this language.</body></html>`;
+    }
+    // JSON-encode for the <script> context; neutralise `<` so a URL can't break
+    // out of the script tag.
+    const src = JSON.stringify(m3u8).replace(/</g, "\\u003c");
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Animelok Player</title>
+<style>html,body{margin:0;height:100%;background:#000}#v{width:100%;height:100%;object-fit:contain}</style>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+</head>
+<body>
+<video id="v" controls autoplay playsinline></video>
+<script>
+(function(){
+  var src=${src};
+  var v=document.getElementById("v");
+  if(window.Hls&&window.Hls.isSupported()){
+    var h=new Hls();h.loadSource(src);h.attachMedia(v);
+    h.on(Hls.Events.ERROR,function(_,d){if(d&&d.fatal)console.error("hls",d.type,d.details);});
+  }else if(v.canPlayType("application/vnd.apple.mpegurl")){v.src=src;}
+})();
+</script>
+</body>
+</html>`;
   }
 }

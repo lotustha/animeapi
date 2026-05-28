@@ -747,6 +747,15 @@ export class Animelok {
     return lang.charAt(0).toUpperCase() + lang.slice(1).toLowerCase();
   }
 
+  // animelok's episode player page: /watch/{slug}-{anilistId}-{ep}. Requires the
+  // slug resolved by resolveStreams() (memoised in workingTitle); returns "" if
+  // unknown so callers can fall back.
+  private static watchUrl(anilistId: string, ep: number): string {
+    const title = this.workingTitle.get(anilistId);
+    if (!title) return "";
+    return `${this.embed}/watch/${buildFullSlug(title, anilistId)}-${ep}`;
+  }
+
   // Candidate AniList titles, English-first (verified canonical for animelok's
   // slug), then romaji, then native.
   private static async titleCandidates(anilistId: string): Promise<string[]> {
@@ -806,13 +815,17 @@ export class Animelok {
 
     const langLower = lang.toLowerCase();
     const display = this.titleCase(lang);
-    const firstEmbed = track.embeds[0]?.url ?? "";
+    // animelok's own SPA player page for this episode — used as the iframe for
+    // direct-HLS results (which carry no embed of their own) so the field is
+    // always populated. Falls back to the first embed if the slug is unknown.
+    const watchPage = this.watchUrl(parsed.anilistId, parsed.ep);
+    const directIframe = watchPage || track.embeds[0]?.url || "";
     const results: AnimelokStreamSource[] = [];
 
     for (const g of track.servers) {
       results.push({
         name: `Animelok ${g.server} (${display})`,
-        iframe: firstEmbed,
+        iframe: directIframe,
         sources: g.streams.map((s) => ({
           file: s.url,
           type: s.url.toLowerCase().includes(".mp4") ? "mp4" : "hls",

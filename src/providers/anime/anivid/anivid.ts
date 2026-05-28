@@ -606,7 +606,7 @@ export class Anivid {
         isFiller: false,
         isSubbed: true,
         isDubbed: true,
-        url: `${this.vidsrc}/embed/anime/${anilistId}/${i}/sub`,
+        url: `${this.vidsrc}/embed/anime/ani${anilistId}/${i}/sub`,
       });
     }
     return eps;
@@ -767,7 +767,7 @@ export class Anivid {
   // and is built to load directly in an iframe/webview, so no /proxy/embed
   // wrapper is needed (unlike vidnest, which blocks direct framing).
   private static vidsrcUrl(anilistId: string, ep: number, type: "sub" | "dub"): string {
-    return `${this.vidsrc}/embed/anime/${anilistId}/${ep}/${type}`;
+    return `${this.vidsrc}/embed/anime/ani${anilistId}/${ep}/${type}`;
   }
 
   // Resolve a real m3u8 by hitting new.vidnest.fun and running the response

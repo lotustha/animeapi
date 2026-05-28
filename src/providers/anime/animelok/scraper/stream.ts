@@ -15,11 +15,17 @@ export type LangTrack = {
   best: string | null;
 };
 
+export type SubTrack = { url: string; lang?: string };
+
 export type AllLangsResult = {
   episodeNumber: number;
   preferQuality: string;
   languages: string[];
   tracks: Record<string, LangTrack>;
+  // Episode-level metadata (same across languages).
+  intro?: [number, number];
+  outro?: [number, number];
+  subtitles: SubTrack[];
 };
 
 // ─── Server categorisation ────────────────────────────────────────────────────
@@ -149,20 +155,46 @@ export function listLanguages(rawServers: any[]): string[] {
   return Array.from(set);
 }
 
+// ─── Episode metadata helpers ──────────────────────────────────────────────────
+
+function parseSkip(start: unknown, end: unknown): [number, number] | undefined {
+  const s = Number(start);
+  const e = Number(end);
+  if (!Number.isFinite(s) || !Number.isFinite(e) || (s === 0 && e === 0)) return undefined;
+  return [s, e];
+}
+
+function parseSubs(raw: unknown): SubTrack[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SubTrack[] = [];
+  for (const item of raw) {
+    if (typeof item === "string") {
+      if (item) out.push({ url: item });
+      continue;
+    }
+    const url = item?.url || item?.file;
+    if (typeof url !== "string" || !url) continue;
+    if (item?.kind === "thumbnails") continue;
+    const lang = item?.label || item?.lang || item?.language;
+    out.push({ url, lang: typeof lang === "string" ? lang : undefined });
+  }
+  return out;
+}
+
 // ─── Public scrapers ───────────────────────────────────────────────────────────
 
-async function fetchRawServers(slug: string, episodeNumber: string | number): Promise<any[]> {
-  const data = await lookerFetch<{ episode?: { servers?: any[] } }>(
+async function fetchEpisode(slug: string, episodeNumber: string | number): Promise<any> {
+  const data = await lookerFetch<{ episode?: any }>(
     `/api/anime/${slug}/episodes/${episodeNumber}`,
     slug,
   );
-  return data.episode?.servers ?? [];
+  return data.episode ?? {};
 }
 
 /**
  * Fetch stream sources for an episode and build a track for EVERY language the
- * episode exposes (JAPANESE/ENGLISH/HINDI/TAMIL/TELUGU/MALAYALAM …) from a
- * single API call.
+ * episode exposes (JAPANESE/ENGLISH/HINDI/TAMIL/TELUGU/MALAYALAM …) plus
+ * episode-level intro/outro/subtitles — all from a single API call.
  */
 export async function scrapeStreamAllLangs(
   anilistId: string,
@@ -171,7 +203,8 @@ export async function scrapeStreamAllLangs(
   preferQuality = "1080p",
 ): Promise<AllLangsResult> {
   const slug = buildFullSlug(title, anilistId);
-  const rawServers = await fetchRawServers(slug, episodeNumber);
+  const episode = await fetchEpisode(slug, episodeNumber);
+  const rawServers: any[] = Array.isArray(episode.servers) ? episode.servers : [];
 
   const languages = listLanguages(rawServers);
   const tracks: Record<string, LangTrack> = {};
@@ -184,23 +217,8 @@ export async function scrapeStreamAllLangs(
     preferQuality,
     languages,
     tracks,
-  };
-}
-
-/** Fetch a single language track (used by /watch). Falls back to all servers. */
-export async function scrapeStreamLang(
-  anilistId: string,
-  episodeNumber: string | number,
-  title: string,
-  lang: string,
-  preferQuality = "1080p",
-): Promise<LangTrack & { episodeNumber: number; languages: string[] }> {
-  const slug = buildFullSlug(title, anilistId);
-  const rawServers = await fetchRawServers(slug, episodeNumber);
-  const track = buildLangTrack(rawServers, lang.toUpperCase(), preferQuality, true);
-  return {
-    ...track,
-    episodeNumber: typeof episodeNumber === "string" ? parseInt(episodeNumber, 10) : episodeNumber,
-    languages: listLanguages(rawServers),
+    intro: parseSkip(episode.introStart, episode.introEnd),
+    outro: parseSkip(episode.outroStart, episode.outroEnd),
+    subtitles: parseSubs(episode.subtitles),
   };
 }

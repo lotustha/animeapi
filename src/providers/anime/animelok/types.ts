@@ -102,7 +102,9 @@ export interface AnimelokStreamSource {
   // animelok only exposes as embeds (Hindi/Tamil/Telugu/Malayalam).
   iframe: string;
   // Direct HLS/MP4 streams. `quality` is animelok's label (1080p/720p/Multi…).
-  sources: { file: string; type: string; quality?: string }[];
+  // `file` is the raw m3u8 (client sends headers.Referer); `proxy` routes it
+  // through our m3u8-proxy with the Referer injected server-side.
+  sources: { file: string; type: string; quality?: string; proxy?: string }[];
   subtitles: { url?: string; lang?: string; type: string }[];
   download: string | null;
   // Audio language of this source (lower-case).

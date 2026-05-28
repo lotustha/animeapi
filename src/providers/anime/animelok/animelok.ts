@@ -1,4 +1,5 @@
 import { Logger } from "../../../core/logger.js";
+import { proxifySource } from "../../../core/proxy.js";
 import {
   anilist as anilistSite,
   anilist_graphql,
@@ -48,6 +49,17 @@ export class Animelok {
   // anilistId → the AniList title that produced a non-empty animelok slug.
   // Memoised because the slug is series-level (stable across episodes).
   private static workingTitle = new Map<string, string>();
+
+  // Referer each direct-stream CDN hard-checks. `pahe` (uwucdn/owocdn — the same
+  // kwik storage animepahe uses) returns 403 without Referer: https://kwik.cx/
+  // (verified). Servers absent here ship the raw file with no proxy/headers.
+  private static SERVER_REFERER: Record<string, string> = {
+    pahe: "https://kwik.cx/",
+  };
+
+  private static refererFor(server: string): string | undefined {
+    return this.SERVER_REFERER[server.toLowerCase()];
+  }
 
   private static headers(): Record<string, string> {
     return {
@@ -820,20 +832,34 @@ export class Animelok {
     // always populated. Falls back to the first embed if the slug is unknown.
     const watchPage = this.watchUrl(parsed.anilistId, parsed.ep);
     const directIframe = watchPage || track.embeds[0]?.url || "";
+    const subtitles = payload.subtitles.map((s) => ({
+      url: s.url,
+      lang: s.lang ?? "English",
+      type: "soft",
+    }));
     const results: AnimelokStreamSource[] = [];
 
     for (const g of track.servers) {
+      // The CDN hard-checks Referer (pahe → kwik.cx). `file` is the raw m3u8 the
+      // client plays directly with headers.Referer; `proxy` injects that Referer
+      // server-side so a header-less client still works.
+      const referer = this.refererFor(g.server);
       results.push({
         name: `Animelok ${g.server} (${display})`,
         iframe: directIframe,
-        sources: g.streams.map((s) => ({
-          file: s.url,
-          type: s.url.toLowerCase().includes(".mp4") ? "mp4" : "hls",
-          quality: s.quality,
-        })),
-        subtitles: [],
+        sources: g.streams.map((s) => {
+          const isMp4 = s.url.toLowerCase().includes(".mp4");
+          return {
+            file: s.url,
+            type: isMp4 ? "mp4" : "hls",
+            quality: s.quality,
+            ...(referer && !isMp4 ? { proxy: proxifySource(s.url, { Referer: referer }) } : {}),
+          };
+        }),
+        subtitles,
         download: null,
         lang: langLower,
+        ...(referer ? { headers: { Referer: referer } } : {}),
       });
     }
 
@@ -842,13 +868,19 @@ export class Animelok {
         name: `Animelok ${e.server} (${display})`,
         iframe: e.url,
         sources: [{ file: e.url, type: "iframe" }],
-        subtitles: [],
+        subtitles,
         download: null,
         lang: langLower,
       });
     }
 
-    return { isDub, results, languages };
+    return {
+      isDub,
+      results,
+      languages,
+      ...(payload.intro ? { intro: payload.intro } : {}),
+      ...(payload.outro ? { outro: payload.outro } : {}),
+    };
   }
 
   static async fetchEpisodeServers(episodeId: string, _type?: string): Promise<AnimelokServer[]> {
@@ -871,13 +903,15 @@ export class Animelok {
         const url = g.streams[0]?.url;
         if (!url || seenUrl.has(url)) continue;
         seenUrl.add(url);
+        const referer = this.refererFor(g.server);
         servers.push({
           name: `animelok ${g.server} (${display})`.toLowerCase(),
           url,
           isDub,
           lang: langLower,
-          intro: { start: 0, end: 0 },
-          outro: { start: 0, end: 0 },
+          intro: { start: payload.intro?.[0] ?? 0, end: payload.intro?.[1] ?? 0 },
+          outro: { start: payload.outro?.[0] ?? 0, end: payload.outro?.[1] ?? 0 },
+          ...(referer ? { headers: { Referer: referer } } : {}),
         });
       }
       for (const e of track.embeds) {

@@ -8,6 +8,7 @@ export const anikoto = "https://anikoto.cz";
 export const toonstream = "https://toonstream.vip";
 export const animesalt = "https://animesalt.ac";
 export const animelok = "https://animelok.online";
+export const aniwaves = "https://aniwaves.ru";
 
 export const anilist = "https://anilist.co";
 export const anilist_graphql = "https://graphql.anilist.co";

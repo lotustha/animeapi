@@ -10,6 +10,7 @@ import { anizenRoutes } from "./anizen/route.js";
 import { anividRoutes } from "./anivid/route.js";
 import { anikotoRoutes } from "./anikoto/route.js";
 import { animelokRoutes } from "./animelok/route.js";
+import { aniwavesRoutes } from "./aniwaves/route.js";
 
 export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(animepaheRoutes)
@@ -22,6 +23,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(anividRoutes)
   .use(anikotoRoutes)
   .use(animelokRoutes)
+  .use(aniwavesRoutes)
 
   // ─── Overview Endpoint ────────────────────────────────────────────────────────
   .get(
@@ -40,6 +42,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
         "anivid",
         "anikoto",
         "animelok",
+        "aniwaves",
       ],
       endpoints: {
         animepahe: [
@@ -221,6 +224,25 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/animelok/watch/:episodeId       → Multi-audio streams (query: type=sub|dub|hindi|tamil|telugu|malayalam)",
           "GET /anime/animelok/servers/:episodeId     → Episode servers, all audio languages tagged",
           "GET /anime/animelok/player/:episodeId      → Self-hosted hls.js player page (iframe target; query: type)",
+        ],
+
+        aniwaves: [
+          "GET /anime/aniwaves/search/:query          → Paginated search",
+          "GET /anime/aniwaves/suggestions/:query     → Search suggestions",
+          "GET /anime/aniwaves/recent-episodes        → Recently updated",
+          "GET /anime/aniwaves/recent-added           → Recently added",
+          "GET /anime/aniwaves/most-popular           → Most popular",
+          "GET /anime/aniwaves/top-airing             → Top airing",
+          "GET /anime/aniwaves/completed              → Completed series",
+          "GET /anime/aniwaves/movies                 → Movies",
+          "GET /anime/aniwaves/tv                     → TV series",
+          "GET /anime/aniwaves/ova                    → OVAs",
+          "GET /anime/aniwaves/ona                    → ONAs",
+          "GET /anime/aniwaves/specials               → Specials",
+          "GET /anime/aniwaves/genre/:genre           → Browse by genre",
+          "GET /anime/aniwaves/info/:id               → Full title details + episodes (id = slug-id)",
+          "GET /anime/aniwaves/watch/:episodeId       → Framable embed iframe + intro/outro (query: type=sub|softsub|dub)",
+          "GET /anime/aniwaves/servers/:episodeId     → Episode servers (query: type)",
         ],
       },
     }),

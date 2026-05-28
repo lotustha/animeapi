@@ -200,6 +200,53 @@ export class Aniwaves {
     return out.results.slice(0, 10).map((r) => ({ ...r, year: "" }));
   }
 
+  // ─── Spotlight (home page featured carousel) ──────────────────────────────────
+  // Slides live in the home swiper: each `.swiper-slide.item` has a title,
+  // synopsis, banner background-image, and a "Play now" link to /watch/{slug-id}.
+  static async spotlight(): Promise<any[]> {
+    const html = await this.getHtml("/home");
+    if (!html) return [];
+    const $ = cheerio.load(html);
+    const out: any[] = [];
+    const seen = new Set<string>();
+    $(".swiper-slide.item").each((_, el) => {
+      const $el = $(el);
+      const href = (
+        $el.find(".actions a[href^='/watch/'], a.btn.play[href^='/watch/']").first().attr("href") ||
+        ""
+      ).trim();
+      if (!href) return; // skip non-spotlight carousels (cards have no Play link)
+      const id = href.replace(/^\/watch\//, "").replace(/^\//, "");
+      const $title = $el.find("h2.title.d-title, .title.d-title").first();
+      const title = $title.text().trim();
+      if (!id || !title || seen.has(id)) return;
+      seen.add(id);
+      const style =
+        $el
+          .find(".image [style*='background-image'], [style*='background-image']")
+          .first()
+          .attr("style") || "";
+      const bm = /url\(['"]?([^'")]+)['"]?\)/.exec(style);
+      const banner = bm ? bm[1]! : null;
+      out.push({
+        id,
+        title,
+        japaneseTitle: $title.attr("data-jp") || null,
+        banner,
+        image: banner || undefined,
+        url: `${this.base}/watch/${id}`,
+        type: $el.find(".meta .quality").first().text().trim() || "",
+        rating: $el.find(".meta .rating").first().text().trim() || undefined,
+        genres: [] as string[],
+        releaseDate: "",
+        sub: 0,
+        dub: 0,
+        description: $el.find(".synopsis").first().text().trim(),
+      });
+    });
+    return out;
+  }
+
   // ─── Info + episodes ──────────────────────────────────────────────────────────
 
   private static cleanTitle(raw: string): string {

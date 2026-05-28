@@ -31,6 +31,19 @@ export const aniwavesRoutes = new Elysia({ prefix: "/aniwaves" })
     return { results };
   })
 
+  // ─── Spotlight ─────────────────────────────────────────────────────────────
+  .get("/spotlight", async () => {
+    const key = `aniwaves:v1:spotlight`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return { results: JSON.parse(cachedData) };
+
+    const results = await Aniwaves.spotlight();
+    if (results && results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 3600);
+    }
+    return { results };
+  })
+
   // ─── Browse ──────────────────────────────────────────────────────────────────
   .get("/recent-episodes", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;

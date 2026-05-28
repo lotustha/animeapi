@@ -1,7 +1,12 @@
-import { SERVER_ORIGIN } from "../../../core/config.js";
 import { Logger } from "../../../core/logger.js";
 import { proxifySource } from "../../../core/proxy.js";
-import { anilist as anilistSite, anilist_graphql, jikan_api, vidnest } from "../../origins.js";
+import {
+  anilist as anilistSite,
+  anilist_graphql,
+  jikan_api,
+  vidnest,
+  vidsrc as vidsrcSite,
+} from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
 import { decryptCipherResponse } from "./scraper/decrypt.js";
 import type {
@@ -17,11 +22,12 @@ import type {
   AnividSuggestionItem,
 } from "./types.js";
 
-// Metadata is sourced from AniList's public GraphQL API. Streaming is
-// delegated to vidnest.fun (iframe-only, keyed on AniList ID).
+// Metadata is sourced from AniList's public GraphQL API. Direct m3u8 streams
+// come from vidnest.fun (keyed on AniList ID); the embeddable iframe player is
+// vidsrc.pm, which also keys on AniList ID + episode + sub/dub.
 //
 // Episode IDs minted here are `${anilistId}$ep=${num}` so /watch and
-// /servers can rebuild the vidnest URL with no extra round-trips.
+// /servers can rebuild the upstream URLs with no extra round-trips.
 //
 // Response shapes mirror src/providers/anime/anizen/types.ts so /anime/anivid
 // is drop-in compatible with /anime/anizen and /anime/animekai.
@@ -29,6 +35,7 @@ export class Anivid {
   private static api = anilist_graphql;
   private static site = anilistSite;
   private static embed = vidnest;
+  private static vidsrc = vidsrcSite;
   private static jikan = jikan_api;
   private static PER_PAGE = 20;
 
@@ -599,7 +606,7 @@ export class Anivid {
         isFiller: false,
         isSubbed: true,
         isDubbed: true,
-        url: `${this.embed}/anime/${anilistId}/${i}/sub`,
+        url: `${this.vidsrc}/embed/anime/${anilistId}/${i}/sub`,
       });
     }
     return eps;
@@ -756,14 +763,11 @@ export class Anivid {
     return type === "dub" ? "dub" : "sub";
   }
 
-  private static iframeUrl(anilistId: string, ep: number, type: "sub" | "dub"): string {
-    return `${this.embed}/anime/${anilistId}/${ep}/${type}`;
-  }
-
-  // Wrap a vidnest player URL in our /proxy/embed page so it can be loaded as a
-  // webview's top-level URL (vidnest only renders inside an iframe).
-  private static embedUrl(playerUrl: string): string {
-    return `${SERVER_ORIGIN.replace(/\/$/, "")}/proxy/embed?url=${encodeURIComponent(playerUrl)}`;
+  // vidsrc.pm embeddable player. It keys on the AniList ID + episode + sub|dub
+  // and is built to load directly in an iframe/webview, so no /proxy/embed
+  // wrapper is needed (unlike vidnest, which blocks direct framing).
+  private static vidsrcUrl(anilistId: string, ep: number, type: "sub" | "dub"): string {
+    return `${this.vidsrc}/embed/anime/${anilistId}/${ep}/${type}`;
   }
 
   // Resolve a real m3u8 by hitting new.vidnest.fun and running the response
@@ -877,12 +881,12 @@ export class Anivid {
       ];
     }
 
-    // Backend down — fall back to the public iframe URL so clients still have
+    // Backend down — fall back to the vidsrc.pm iframe so clients still have
     // something to show.
     return [
       {
-        name: `anivid vidnest iframe${suffix}`.toLowerCase(),
-        url: this.iframeUrl(parsed.anilistId, parsed.ep, t),
+        name: `anivid vidsrc iframe${suffix}`.toLowerCase(),
+        url: this.vidsrcUrl(parsed.anilistId, parsed.ep, t),
         isDub: t === "dub",
         intro: { start: 0, end: 0 },
         outro: { start: 0, end: 0 },
@@ -916,10 +920,10 @@ export class Anivid {
       //    (scales). Player must send headers.Referer on EVERY request.
       //  • sources[].proxy = same stream via our m3u8-proxy with the Referer
       //    injected server-side → no client headers, but uses our bandwidth.
-      //  • iframe = /proxy/embed wrapper page, ready to drop into a webview.
+      //  • iframe = vidsrc.pm player, ready to drop into a webview.
       const result: AnividStreamSource = {
         name: `Anivid VidNest ${vid.server}${vid.quality ? ` ${vid.quality}` : ""}${suffix}`,
-        iframe: this.embedUrl(this.iframeUrl(parsed.anilistId, parsed.ep, t)),
+        iframe: this.vidsrcUrl(parsed.anilistId, parsed.ep, t),
         sources: [
           {
             file: vid.m3u8,
@@ -939,11 +943,12 @@ export class Anivid {
       };
     }
 
-    // Iframe fallback when the vidnest backend can't be reached.
-    const url = this.iframeUrl(parsed.anilistId, parsed.ep, t);
+    // Iframe fallback when the vidnest backend can't be reached. vidsrc.pm
+    // resolves its own streams, so it works even when vidnest is down.
+    const url = this.vidsrcUrl(parsed.anilistId, parsed.ep, t);
     const result: AnividStreamSource = {
-      name: `Anivid VidNest Iframe${suffix}`,
-      iframe: this.embedUrl(url),
+      name: `Anivid VidSrc Iframe${suffix}`,
+      iframe: url,
       sources: [{ file: url, type: "iframe" }],
       subtitles: [],
       download: null,

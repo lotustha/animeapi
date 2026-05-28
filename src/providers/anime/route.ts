@@ -9,6 +9,7 @@ import { hianimeRoutes } from "./hianime/route.js";
 import { anizenRoutes } from "./anizen/route.js";
 import { anividRoutes } from "./anivid/route.js";
 import { anikotoRoutes } from "./anikoto/route.js";
+import { animelokRoutes } from "./animelok/route.js";
 
 export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(animepaheRoutes)
@@ -20,6 +21,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
   .use(anizenRoutes)
   .use(anividRoutes)
   .use(anikotoRoutes)
+  .use(animelokRoutes)
 
   // ─── Overview Endpoint ────────────────────────────────────────────────────────
   .get(
@@ -37,6 +39,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
         "anizen",
         "anivid",
         "anikoto",
+        "animelok",
       ],
       endpoints: {
         animepahe: [
@@ -191,6 +194,32 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/anikoto/info/:id               → Full title details + episodes",
           "GET /anime/anikoto/watch/:episodeId       → Decrypted m3u8 sources + Referer header (query: type=sub|dub)",
           "GET /anime/anikoto/servers/:episodeId     → Episode servers (query: type)",
+        ],
+
+        animelok: [
+          "GET /anime/animelok/search/:query          → Paginated search (Jikan + AniList GraphQL)",
+          "GET /anime/animelok/suggestions/:query     → Search suggestions",
+          "GET /anime/animelok/spotlight              → Spotlight anime (trending + banner)",
+          "GET /anime/animelok/recent-episodes        → Recently aired episodes",
+          "GET /anime/animelok/recent-added           → Recently added series",
+          "GET /anime/animelok/completed              → Latest completed series",
+          "GET /anime/animelok/new-releases           → New releases",
+          "GET /anime/animelok/movies                 → Movies",
+          "GET /anime/animelok/tv                     → TV Series",
+          "GET /anime/animelok/ova                    → OVAs",
+          "GET /anime/animelok/ona                    → ONAs",
+          "GET /anime/animelok/specials               → Specials",
+          "GET /anime/animelok/trending               → Trending anime",
+          "GET /anime/animelok/popular                → Most popular",
+          "GET /anime/animelok/top-rated              → Highest rated",
+          "GET /anime/animelok/seasonal               → Current season",
+          "GET /anime/animelok/upcoming               → Not yet released",
+          "GET /anime/animelok/schedule/:date         → Airing schedule (YYYY-MM-DD, UTC)",
+          "GET /anime/animelok/genres                 → Available genres",
+          "GET /anime/animelok/genre/:genre           → Browse by genre",
+          "GET /anime/animelok/info/:id               → Full title details + episodes (id = AniList ID)",
+          "GET /anime/animelok/watch/:episodeId       → Multi-audio streams (query: type=sub|dub|hindi|tamil|telugu|malayalam)",
+          "GET /anime/animelok/servers/:episodeId     → Episode servers, all audio languages tagged",
         ],
       },
     }),

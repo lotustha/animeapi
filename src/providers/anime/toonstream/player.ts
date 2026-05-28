@@ -43,8 +43,8 @@ export async function moviePlayer(slug: string) {
   return makeHtml("Movie", slug);
 }
 
-export async function episodePlayer(slug: string) {
-  const res = await ScrapeEpisodeSources(slug);
+export async function episodePlayer(slug: string, req: Request) {
+  const res = await ScrapeEpisodeSources(slug, req);
 
   const sources = res?.sources || [];
 

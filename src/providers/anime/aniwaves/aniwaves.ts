@@ -301,10 +301,18 @@ export class Aniwaves {
       $(".description, .synopsis").first().text() ||
       ""
     ).trim();
-    const genres = $(".genre a, a[href^='/genre/']")
+    // The anime's genres sit in a "Genres:" row; a bare `a[href^='/genre/']` also
+    // catches the A-Z genre filter (~50 links), so scope to that row, dedupe,
+    // and cap to 4.
+    const $genreRow = $('div:contains("Genres:")').last();
+    const $genreLinks = $genreRow.find("a[href^='/genre/']").length
+      ? $genreRow.find("a[href^='/genre/']")
+      : $(".genre a");
+    const genres = $genreLinks
       .map((_, a) => $(a).text().trim())
       .get()
-      .filter((g, i, arr) => g && arr.indexOf(g) === i);
+      .filter((g, i, arr) => g && arr.indexOf(g) === i)
+      .slice(0, 4);
 
     const numId = this.numericId(id);
     const episodes = await this.fetchEpisodes(numId);

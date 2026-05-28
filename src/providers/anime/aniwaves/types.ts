@@ -96,6 +96,9 @@ export interface AniwavesStreamSource {
   sources: { file: string; type: string }[];
   subtitles: { url?: string; lang?: string; type: string }[];
   download: string | null;
+  // Headers the client must send when loading `iframe`. The embed hosts gate on
+  // the aniwaves Referer, so the webview must send it or the player won't load.
+  headers?: Record<string, string>;
 }
 
 export interface AniwavesStreamResponse {

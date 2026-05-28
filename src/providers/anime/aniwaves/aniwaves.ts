@@ -479,6 +479,9 @@ export class Aniwaves {
         sources: [],
         subtitles: [],
         download: null,
+        // The embed hosts gate on the aniwaves Referer — the webview must send
+        // this header when loading `iframe` or the player won't load.
+        headers: { Referer: `${this.base}/` },
       });
     }
 

@@ -92,8 +92,8 @@ export interface AnividServer {
 
 export interface AnividStreamSource {
   name: string;
-  // vidsrc.pm embed URL — keyed on AniList ID + episode + sub/dub, ready to
-  // load directly in an iframe/webview (resolves its own streams).
+  // /proxy/embed wrapper URL — an HTML page on our server that frames the
+  // vidnest player, ready to load directly in a webview.
   iframe: string;
   // file = raw m3u8 (CDN serves the client directly; player must send
   // headers.Referer). proxy = same stream via our m3u8-proxy (Referer injected

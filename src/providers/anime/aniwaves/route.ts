@@ -31,13 +31,15 @@ export const aniwavesRoutes = new Elysia({ prefix: "/aniwaves" })
     return { results };
   })
 
-  // ─── Spotlight ─────────────────────────────────────────────────────────────
-  .get("/spotlight", async () => {
-    const key = `aniwaves:v1:spotlight`;
+  // ─── Spotlight (Top anime — query: period=day|week|month) ────────────────────
+  .get("/spotlight", async ({ query: qs }) => {
+    const period = ((qs?.period as string) || "day").toLowerCase();
+    const p = ["day", "week", "month"].includes(period) ? period : "day";
+    const key = `aniwaves:v1:spotlight:${p}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return { results: JSON.parse(cachedData) };
 
-    const results = await Aniwaves.spotlight();
+    const results = await Aniwaves.spotlight(p as "day" | "week" | "month");
     if (results && results.length > 0) {
       Cache.set(key, JSON.stringify(results), 3600);
     }

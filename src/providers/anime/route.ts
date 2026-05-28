@@ -229,7 +229,7 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
         aniwaves: [
           "GET /anime/aniwaves/search/:query          → Paginated search",
           "GET /anime/aniwaves/suggestions/:query     → Search suggestions",
-          "GET /anime/aniwaves/spotlight              → Spotlight carousel (banner + synopsis)",
+          "GET /anime/aniwaves/spotlight              → Top anime ranked list (query: period=day|week|month)",
           "GET /anime/aniwaves/recent-episodes        → Recently updated episodes",
           "GET /anime/aniwaves/recent-added           → Recently added",
           "GET /anime/aniwaves/newest                 → Newest",

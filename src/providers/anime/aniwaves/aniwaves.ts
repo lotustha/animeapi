@@ -232,48 +232,40 @@ export class Aniwaves {
     return out.results.slice(0, 10).map((r) => ({ ...r, year: "" }));
   }
 
-  // ─── Spotlight (home page featured carousel) ──────────────────────────────────
-  // Slides live in the home swiper: each `.swiper-slide.item` has a title,
-  // synopsis, banner background-image, and a "Play now" link to /watch/{slug-id}.
-  static async spotlight(): Promise<any[]> {
+  // ─── Spotlight (home page "Top anime" ranked list) ───────────────────────────
+  // Sourced from <div id="top-anime">, which has Day/Week/Month tabs; each tab is
+  // a ranked list of `<a class="item rankN" href="/watch/{slug-id}">` entries.
+  static async spotlight(period: "day" | "week" | "month" = "day"): Promise<any[]> {
     const html = await this.getHtml("/home");
     if (!html) return [];
     const $ = cheerio.load(html);
+    const p = ["day", "week", "month"].includes(period) ? period : "day";
+    let $tab = $(`#top-anime .tab-content[data-name="${p}"]`);
+    if (!$tab.length) $tab = $("#top-anime .tab-content").first();
+
     const out: any[] = [];
     const seen = new Set<string>();
-    $(".swiper-slide.item").each((_, el) => {
+    $tab.find("a.item").each((_, el) => {
       const $el = $(el);
-      const href = (
-        $el.find(".actions a[href^='/watch/'], a.btn.play[href^='/watch/']").first().attr("href") ||
-        ""
-      ).trim();
-      if (!href) return; // skip non-spotlight carousels (cards have no Play link)
+      const href = ($el.attr("href") || "").trim();
+      if (!href) return;
       const id = href.replace(/^\/watch\//, "").replace(/^\//, "");
-      const $title = $el.find("h2.title.d-title, .title.d-title").first();
-      const title = $title.text().trim();
+      const $title = $el.find(".name.d-title").first();
+      const title = ($title.text() || $el.find(".poster img").attr("alt") || "").trim();
       if (!id || !title || seen.has(id)) return;
       seen.add(id);
-      const style =
-        $el
-          .find(".image [style*='background-image'], [style*='background-image']")
-          .first()
-          .attr("style") || "";
-      const bm = /url\(['"]?([^'")]+)['"]?\)/.exec(style);
-      const banner = bm ? bm[1]! : null;
+      const rankCls = /rank(\d+)/.exec($el.attr("class") || "");
       out.push({
         id,
         title,
         japaneseTitle: $title.attr("data-jp") || null,
-        banner,
-        image: banner || undefined,
+        image: $el.find(".poster img").attr("src") || undefined,
         url: `${this.base}/watch/${id}`,
-        type: $el.find(".meta .quality").first().text().trim() || "",
-        rating: $el.find(".meta .rating").first().text().trim() || undefined,
-        genres: [] as string[],
-        releaseDate: "",
-        sub: 0,
-        dub: 0,
-        description: $el.find(".synopsis").first().text().trim(),
+        type: $el.find(".meta .dot").last().text().trim() || "",
+        rank: rankCls ? parseInt(rankCls[1]!, 10) : out.length + 1,
+        sub: this.toInt($el.find(".ep-status.sub span").first().text()),
+        dub: this.toInt($el.find(".ep-status.dub span").first().text()),
+        episodes: this.toInt($el.find(".ep-status.total span").first().text()),
       });
     });
     return out;

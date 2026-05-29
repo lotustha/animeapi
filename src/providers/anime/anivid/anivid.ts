@@ -862,6 +862,8 @@ export class Anivid {
     if (!parsed) return [];
     const t = this.normalizeType(subOrDub);
     const suffix = t === "dub" ? " (Dub)" : " (Sub)";
+    // Same embed page /watch hands back, so clients can frame any server.
+    const iframe = this.embedUrl(this.iframeUrl(parsed.anilistId, parsed.ep, t));
 
     const vid = await this.resolveVidnestSource(parsed.anilistId, parsed.ep, t);
     if (vid) {
@@ -872,6 +874,7 @@ export class Anivid {
           isDub: t === "dub",
           intro: { start: vid.intro?.[0] ?? 0, end: vid.intro?.[1] ?? 0 },
           outro: { start: vid.outro?.[0] ?? 0, end: vid.outro?.[1] ?? 0 },
+          iframe,
           headers: { Referer: vid.referer },
         },
       ];
@@ -886,6 +889,7 @@ export class Anivid {
         isDub: t === "dub",
         intro: { start: 0, end: 0 },
         outro: { start: 0, end: 0 },
+        iframe,
       },
     ];
   }

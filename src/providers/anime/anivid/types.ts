@@ -85,12 +85,8 @@ export interface AnividServer {
   isDub: boolean;
   intro: { start: number; end: number };
   outro: { start: number; end: number };
-  // /proxy/embed wrapper URL — the same embed page /watch returns, so clients
-  // can frame a server directly in a webview without resolving the m3u8.
-  iframe: string;
-  // Same purpose as AnividStreamSource.headers — required when `url` points
-  // at a CDN that enforces Referer (vidnest does).
-  headers?: Record<string, string>;
+  // `url` is the /proxy/embed wrapper page (same embed /watch returns), ready
+  // to frame directly in a webview — not a raw m3u8.
 }
 
 export interface AnividStreamSource {

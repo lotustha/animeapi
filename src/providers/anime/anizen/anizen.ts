@@ -42,7 +42,11 @@ export class Anizen {
     try {
       const res = await fetch(`${this.api}${path}`, { headers: this.headers() });
       if (!res.ok) return null;
-      return (await res.json()) as T;
+      // Upstream renamed its host aniapi.anizen.tr → cdn.anizen.tr, but its JSON
+      // still hardcodes the old (now NXDOMAIN) host in poster/player/embed URLs.
+      // Rewrite it everywhere before parsing so every surfaced URL is reachable.
+      const text = (await res.text()).replaceAll("aniapi.anizen.tr", "cdn.anizen.tr");
+      return JSON.parse(text) as T;
     } catch (err) {
       Logger.error(`Anizen getJson error for ${path}: ${String(err)}`);
       return null;
@@ -415,7 +419,7 @@ export class Anizen {
   private static readonly PLAYER_REFERER = "https://megaplay.buzz/";
 
   private static isPlayerUrl(url: string): boolean {
-    return /^https?:\/\/[^/]*aniapi\.anizen\.[a-z]+\/player\//i.test(url);
+    return /^https?:\/\/[^/]*(?:aniapi|cdn)\.anizen\.[a-z]+\/player\//i.test(url);
   }
 
   private static async resolvePlayer(playerUrl: string): Promise<{

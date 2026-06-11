@@ -86,8 +86,9 @@ export interface AnimelokInfo {
 
 export interface AnimelokServer {
   name: string;
-  // Frameable embed URL — animelok.online's own watch page for direct-HLS
-  // servers, or the upstream embed player. Never a raw m3u8.
+  // Player-only embed iframe URL (megaplay/videasy/vidnest/vidwish for
+  // sub/dub — the same players animelok's own watch page injects — or the
+  // upstream embed for Indian languages). Never a raw m3u8.
   url: string;
   isDub: boolean;
   // Audio language for this server (lower-case): japanese | english | hindi |
@@ -99,9 +100,10 @@ export interface AnimelokServer {
 
 export interface AnimelokStreamSource {
   name: string;
-  // Frameable player URL — animelok.online's own watch page for direct-HLS
-  // results, or the upstream embed player (short.icu / zephyrflick) for
-  // languages animelok only exposes as embeds (Hindi/Tamil/Telugu/Malayalam).
+  // Player-only embed iframe URL — megaplay (the same player animelok's own
+  // watch page injects) for direct-HLS results, or the upstream embed player
+  // (short.icu / zephyrflick) for languages animelok only exposes as embeds
+  // (Hindi/Tamil/Telugu/Malayalam).
   iframe: string;
   // Direct HLS/MP4 streams. `quality` is animelok's label (1080p/720p/Multi…).
   // `file` is the raw m3u8 (client sends headers.Referer); `proxy` routes it

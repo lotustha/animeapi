@@ -14,6 +14,9 @@ export const anilist = "https://anilist.co";
 export const anilist_graphql = "https://graphql.anilist.co";
 export const jikan_api = "https://api.jikan.moe/v4";
 export const vidnest = "https://vidnest.fun";
+export const megaplay = "https://megaplay.buzz";
+export const videasy = "https://player.videasy.net";
+export const vidwish = "https://vidwish.live";
 
 export const flixhq = "https://flixhq.to";
 export const yflix = "https://yflix.to";

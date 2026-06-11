@@ -22,6 +22,9 @@ export type AllLangsResult = {
   // animelok's full slug (`${titleToSlug(title)}-${anilistId}`) — callers use it
   // to build links back to animelok.online pages (e.g. /watch/<slug>?ep=N).
   slug: string;
+  // hianime episode id when animelok has one mapped — unlocks the vidwish.live
+  // embed player (same one animelok's own frontend injects).
+  hianimeId: string | null;
   preferQuality: string;
   languages: string[];
   tracks: Record<string, LangTrack>;
@@ -218,6 +221,7 @@ export async function scrapeStreamAllLangs(
   return {
     episodeNumber: typeof episodeNumber === "string" ? parseInt(episodeNumber, 10) : episodeNumber,
     slug,
+    hianimeId: episode.hianimeId ?? null,
     preferQuality,
     languages,
     tracks,

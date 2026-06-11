@@ -5,6 +5,10 @@ import {
   anilist_graphql,
   jikan_api,
   animelok as animelokSite,
+  megaplay as megaplaySite,
+  videasy as videasySite,
+  vidnest as vidnestSite,
+  vidwish as vidwishSite,
 } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
 import { buildFullSlug } from "./scraper/slug.js";
@@ -759,11 +763,31 @@ export class Animelok {
     return lang.charAt(0).toUpperCase() + lang.slice(1).toLowerCase();
   }
 
-  // animelok.online's own watch page — verified frameable (200, no
-  // X-Frame-Options/CSP, no framebusting JS). Direct-HLS results point their
-  // iframe here; `lang` rides along as a query param for the SPA.
-  private static watchPageUrl(slug: string, ep: number, lang: string): string {
-    return `${animelokSite}/watch/${slug}?ep=${ep}&lang=${lang}`;
+  // Player-only embed iframes, mirroring exactly what animelok.online's own
+  // frontend injects on its watch page (it filters OUT the raw pahe/bato
+  // servers and shows these instead). All verified frameable. vidwish needs a
+  // hianime episode id, which animelok's API only sometimes maps.
+  private static embedPlayers(
+    anilistId: string,
+    ep: number,
+    dub: boolean,
+    hianimeId?: string | null,
+  ): { server: string; url: string }[] {
+    const t = dub ? "dub" : "sub";
+    const out: { server: string; url: string }[] = [];
+    if (hianimeId) {
+      out.push({
+        server: "vidstream",
+        url: `${vidwishSite}/stream/s-2/${hianimeId}/${t}?autostart=true&lang=${dub ? "eng" : "jap"}`,
+      });
+    }
+    out.push({ server: "aniplay", url: `${videasySite}/anime/${anilistId}/${ep}?autoplay=true` });
+    out.push({ server: "vidmaster", url: `${vidnestSite}/animepahe/${anilistId}/${ep}/${t}` });
+    out.push({
+      server: "anistream",
+      url: `${megaplaySite}/stream/ani/${anilistId}/${ep}/${t}?autostart=true`,
+    });
+    return out;
   }
 
   // Candidate AniList titles, English-first (verified canonical for animelok's
@@ -811,8 +835,8 @@ export class Animelok {
   }
 
   // Build the anikai-shaped results for one language track. `directIframe` is
-  // animelok's own watch page for this language (direct-HLS results point
-  // there; embed results keep their own embed URL).
+  // a player-only embed for this language (direct-HLS results point there;
+  // embed results keep their own embed URL).
   private static buildLangResults(
     track: LangTrack,
     langUpper: string,
@@ -887,7 +911,13 @@ export class Animelok {
     for (const langUpper of targetLangs) {
       const track = payload.tracks[langUpper];
       if (!track) continue;
-      const iframe = this.watchPageUrl(payload.slug, parsed.ep, langUpper.toLowerCase());
+      const players = this.embedPlayers(
+        parsed.anilistId,
+        parsed.ep,
+        langUpper === "ENGLISH",
+        payload.hianimeId,
+      );
+      const iframe = (players.find((p) => p.server === "anistream") ?? players[0]!).url;
       results.push(...this.buildLangResults(track, langUpper, iframe, subtitles));
     }
 
@@ -917,17 +947,16 @@ export class Animelok {
       const display = this.titleCase(langUpper);
       const isDub = langUpper !== "JAPANESE";
 
-      // Direct-HLS servers point at animelok.online's own watch page (verified
-      // frameable: 200, no X-Frame-Options/CSP), so one entry per language —
-      // never a raw m3u8. `lang` rides along as a query param for the SPA.
-      const firstDirect = track.servers[0];
-      if (firstDirect) {
-        const watchUrl = this.watchPageUrl(payload.slug, parsed.ep, langLower);
-        if (!seenUrl.has(watchUrl)) {
-          seenUrl.add(watchUrl);
+      // Player-only embed iframes replace the raw pahe/bato servers — the same
+      // server list animelok's own watch page shows for sub/dub audiences.
+      // Indian-language servers arrive as upstream embeds (loop below).
+      if (langUpper === "JAPANESE" || langUpper === "ENGLISH") {
+        for (const p of this.embedPlayers(parsed.anilistId, parsed.ep, isDub, payload.hianimeId)) {
+          if (seenUrl.has(p.url)) continue;
+          seenUrl.add(p.url);
           servers.push({
-            name: `animelok ${firstDirect.server} (${display})`.toLowerCase(),
-            url: watchUrl,
+            name: `animelok ${p.server} (${display})`.toLowerCase(),
+            url: p.url,
             isDub,
             lang: langLower,
             intro: { start: payload.intro?.[0] ?? 0, end: payload.intro?.[1] ?? 0 },

@@ -99,8 +99,9 @@ export interface AnimelokServer {
 
 export interface AnimelokStreamSource {
   name: string;
-  // Embed/iframe player URL (e.g. short.icu / zephyrflick) — used for languages
-  // animelok only exposes as embeds (Hindi/Tamil/Telugu/Malayalam).
+  // Frameable player URL — animelok.online's own watch page for direct-HLS
+  // results, or the upstream embed player (short.icu / zephyrflick) for
+  // languages animelok only exposes as embeds (Hindi/Tamil/Telugu/Malayalam).
   iframe: string;
   // Direct HLS/MP4 streams. `quality` is animelok's label (1080p/720p/Multi…).
   // `file` is the raw m3u8 (client sends headers.Referer); `proxy` routes it

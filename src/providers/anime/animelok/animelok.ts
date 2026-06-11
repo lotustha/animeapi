@@ -1,4 +1,3 @@
-import { SERVER_ORIGIN } from "../../../core/config.js";
 import { Logger } from "../../../core/logger.js";
 import { proxifySource } from "../../../core/proxy.js";
 import {
@@ -760,12 +759,11 @@ export class Animelok {
     return lang.charAt(0).toUpperCase() + lang.slice(1).toLowerCase();
   }
 
-  // Our self-hosted player page (hls.js over the proxied m3u8). animelok's own
-  // embeds are unreliable (short.icu is dead; zephyrflick blocks framing), so
-  // direct-HLS results point their iframe here instead.
-  private static playerUrl(episodeId: string, lang: string): string {
-    const base = SERVER_ORIGIN.replace(/\/$/, "");
-    return `${base}/anime/animelok/player/${encodeURIComponent(episodeId)}?type=${lang}`;
+  // animelok.online's own watch page — verified frameable (200, no
+  // X-Frame-Options/CSP, no framebusting JS). Direct-HLS results point their
+  // iframe here; `lang` rides along as a query param for the SPA.
+  private static watchPageUrl(slug: string, ep: number, lang: string): string {
+    return `${animelokSite}/watch/${slug}?ep=${ep}&lang=${lang}`;
   }
 
   // Candidate AniList titles, English-first (verified canonical for animelok's
@@ -812,9 +810,9 @@ export class Animelok {
     return null;
   }
 
-  // Build the anikai-shaped results for one language track. `directIframe` is our
-  // self-hosted player URL for this language (direct-HLS results point there;
-  // embed results keep their own embed URL).
+  // Build the anikai-shaped results for one language track. `directIframe` is
+  // animelok's own watch page for this language (direct-HLS results point
+  // there; embed results keep their own embed URL).
   private static buildLangResults(
     track: LangTrack,
     langUpper: string,
@@ -889,7 +887,7 @@ export class Animelok {
     for (const langUpper of targetLangs) {
       const track = payload.tracks[langUpper];
       if (!track) continue;
-      const iframe = this.playerUrl(episodeId, langUpper.toLowerCase());
+      const iframe = this.watchPageUrl(payload.slug, parsed.ep, langUpper.toLowerCase());
       results.push(...this.buildLangResults(track, langUpper, iframe, subtitles));
     }
 
@@ -924,7 +922,7 @@ export class Animelok {
       // never a raw m3u8. `lang` rides along as a query param for the SPA.
       const firstDirect = track.servers[0];
       if (firstDirect) {
-        const watchUrl = `${animelokSite}/watch/${payload.slug}?ep=${parsed.ep}&lang=${langLower}`;
+        const watchUrl = this.watchPageUrl(payload.slug, parsed.ep, langLower);
         if (!seenUrl.has(watchUrl)) {
           seenUrl.add(watchUrl);
           servers.push({
@@ -956,8 +954,8 @@ export class Animelok {
   // ─── Self-hosted player ───────────────────────────────────────────────────────
 
   // HTML player page served at /anime/animelok/player/:episodeId — plays the
-  // proxied m3u8 with hls.js (no client headers needed). Used as the iframe for
-  // direct-HLS results, since animelok's own embeds are unreliable.
+  // proxied m3u8 with hls.js (no client headers needed). Standalone fallback
+  // player; /watch and /servers now hand back animelok's own watch page.
   static async playerPage(episodeId: string, type?: string): Promise<string> {
     const res = await this.streams(episodeId, type);
     let url = "";

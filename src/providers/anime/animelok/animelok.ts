@@ -919,20 +919,23 @@ export class Animelok {
       const display = this.titleCase(langUpper);
       const isDub = langUpper !== "JAPANESE";
 
-      for (const g of track.servers) {
-        const url = g.streams[0]?.url;
-        if (!url || seenUrl.has(url)) continue;
-        seenUrl.add(url);
-        const referer = this.refererFor(g.server);
-        servers.push({
-          name: `animelok ${g.server} (${display})`.toLowerCase(),
-          url,
-          isDub,
-          lang: langLower,
-          intro: { start: payload.intro?.[0] ?? 0, end: payload.intro?.[1] ?? 0 },
-          outro: { start: payload.outro?.[0] ?? 0, end: payload.outro?.[1] ?? 0 },
-          ...(referer ? { headers: { Referer: referer } } : {}),
-        });
+      // Direct-HLS servers all play through the self-hosted player page (the
+      // same iframe /watch returns), so one frameable entry per language —
+      // not one per server, and never a raw m3u8.
+      const firstDirect = track.servers[0];
+      if (firstDirect) {
+        const playerUrl = this.playerUrl(episodeId, langLower);
+        if (!seenUrl.has(playerUrl)) {
+          seenUrl.add(playerUrl);
+          servers.push({
+            name: `animelok ${firstDirect.server} (${display})`.toLowerCase(),
+            url: playerUrl,
+            isDub,
+            lang: langLower,
+            intro: { start: payload.intro?.[0] ?? 0, end: payload.intro?.[1] ?? 0 },
+            outro: { start: payload.outro?.[0] ?? 0, end: payload.outro?.[1] ?? 0 },
+          });
+        }
       }
       for (const e of track.embeds) {
         if (!e.url || seenUrl.has(e.url)) continue;

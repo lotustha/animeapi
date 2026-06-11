@@ -86,6 +86,8 @@ export interface AnimelokInfo {
 
 export interface AnimelokServer {
   name: string;
+  // Frameable embed URL — the self-hosted player page for direct-HLS servers
+  // (same iframe /watch returns) or the upstream embed player. Never a raw m3u8.
   url: string;
   isDub: boolean;
   // Audio language for this server (lower-case): japanese | english | hindi |
@@ -93,7 +95,6 @@ export interface AnimelokServer {
   lang?: string;
   intro: { start: number; end: number };
   outro: { start: number; end: number };
-  headers?: Record<string, string>;
 }
 
 export interface AnimelokStreamSource {

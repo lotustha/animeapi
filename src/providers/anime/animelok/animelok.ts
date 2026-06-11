@@ -919,17 +919,17 @@ export class Animelok {
       const display = this.titleCase(langUpper);
       const isDub = langUpper !== "JAPANESE";
 
-      // Direct-HLS servers all play through the self-hosted player page (the
-      // same iframe /watch returns), so one frameable entry per language —
-      // not one per server, and never a raw m3u8.
+      // Direct-HLS servers point at animelok.online's own watch page (verified
+      // frameable: 200, no X-Frame-Options/CSP), so one entry per language —
+      // never a raw m3u8. `lang` rides along as a query param for the SPA.
       const firstDirect = track.servers[0];
       if (firstDirect) {
-        const playerUrl = this.playerUrl(episodeId, langLower);
-        if (!seenUrl.has(playerUrl)) {
-          seenUrl.add(playerUrl);
+        const watchUrl = `${animelokSite}/watch/${payload.slug}?ep=${parsed.ep}&lang=${langLower}`;
+        if (!seenUrl.has(watchUrl)) {
+          seenUrl.add(watchUrl);
           servers.push({
             name: `animelok ${firstDirect.server} (${display})`.toLowerCase(),
-            url: playerUrl,
+            url: watchUrl,
             isDub,
             lang: langLower,
             intro: { start: payload.intro?.[0] ?? 0, end: payload.intro?.[1] ?? 0 },

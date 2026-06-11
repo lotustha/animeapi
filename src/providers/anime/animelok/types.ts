@@ -86,8 +86,8 @@ export interface AnimelokInfo {
 
 export interface AnimelokServer {
   name: string;
-  // Frameable embed URL — the self-hosted player page for direct-HLS servers
-  // (same iframe /watch returns) or the upstream embed player. Never a raw m3u8.
+  // Frameable embed URL — animelok.online's own watch page for direct-HLS
+  // servers, or the upstream embed player. Never a raw m3u8.
   url: string;
   isDub: boolean;
   // Audio language for this server (lower-case): japanese | english | hindi |

@@ -19,6 +19,9 @@ export type SubTrack = { url: string; lang?: string };
 
 export type AllLangsResult = {
   episodeNumber: number;
+  // animelok's full slug (`${titleToSlug(title)}-${anilistId}`) — callers use it
+  // to build links back to animelok.online pages (e.g. /watch/<slug>?ep=N).
+  slug: string;
   preferQuality: string;
   languages: string[];
   tracks: Record<string, LangTrack>;
@@ -214,6 +217,7 @@ export async function scrapeStreamAllLangs(
 
   return {
     episodeNumber: typeof episodeNumber === "string" ? parseInt(episodeNumber, 10) : episodeNumber,
+    slug,
     preferQuality,
     languages,
     tracks,

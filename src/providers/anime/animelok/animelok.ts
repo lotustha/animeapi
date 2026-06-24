@@ -834,10 +834,6 @@ export class Animelok {
     return null;
   }
 
-  // Embed hosts that are permanently unplayable: short.icu (NXDOMAIN) and
-  // play.zephyrflick.top (403 + X-Frame-Options blocks iframing).
-  private static readonly UNPLAYABLE_EMBED_HOSTS = /(?:short\.icu|zephyrflick\.)/i;
-
   // Build the anikai-shaped results for one language track. `directIframe` is
   // a player-only embed for this language (direct-HLS results point there;
   // embed results keep their own embed URL).
@@ -876,12 +872,12 @@ export class Animelok {
     }
 
     for (const e of track.embeds) {
-      // short.icu is NXDOMAIN (dead) and zephyrflick returns 403 + blocks
-      // framing (X-Frame-Options), so these embeds can never play — skip them
-      // rather than surface a server that always errors. (Languages whose only
-      // servers are these — e.g. hindi/tamil/telugu/malayalam on most titles —
-      // therefore drop out of the response entirely.)
-      if (this.UNPLAYABLE_EMBED_HOSTS.test(e.url)) continue;
+      // Pass every embed iframe straight through. The client loads it as the
+      // WebView's MAIN page (not a nested <iframe>), so X-Frame-Options doesn't
+      // apply, and hosts like short.icu that don't resolve on server DNS still
+      // play on-device — exactly as they do on animelok.net's own watch page.
+      // This keeps hindi/tamil/telugu/malayalam available instead of dropping
+      // languages whose only server is one of these embeds.
       out.push({
         name: `Animelok ${e.server} (${display})`,
         iframe: e.url,

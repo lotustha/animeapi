@@ -872,12 +872,13 @@ export class Animelok {
     }
 
     for (const e of track.embeds) {
-      // Pass every embed iframe straight through. The client loads it as the
-      // WebView's MAIN page (not a nested <iframe>), so X-Frame-Options doesn't
-      // apply, and hosts like short.icu that don't resolve on server DNS still
-      // play on-device — exactly as they do on animelok.net's own watch page.
-      // This keeps hindi/tamil/telugu/malayalam available instead of dropping
-      // languages whose only server is one of these embeds.
+      // short.icu is NXDOMAIN — dead on every DNS (Google/Cloudflare/ISP/VPS),
+      // so it can't load in any WebView; drop it. Everything else passes
+      // straight through, including play.zephyrflick.top — the multi-audio
+      // "Multi" player that actually serves hindi/tamil/telugu/malayalam. The
+      // client loads it as the WebView's MAIN page, so Cloudflare's JS challenge
+      // passes and X-Frame-Options doesn't apply, exactly like animelok.net.
+      if (/short\.icu/i.test(e.url)) continue;
       out.push({
         name: `Animelok ${e.server} (${display})`,
         iframe: e.url,
@@ -885,6 +886,9 @@ export class Animelok {
         subtitles,
         download: null,
         lang: langLower,
+        // These embeds (e.g. zephyrflick behind Cloudflare) are hotlink-gated;
+        // load them with the animelok.net Referer the site itself uses.
+        headers: { Referer: `${this.embed}/` },
       });
     }
 

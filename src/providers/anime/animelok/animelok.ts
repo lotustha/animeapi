@@ -834,6 +834,10 @@ export class Animelok {
     return null;
   }
 
+  // Embed hosts that are permanently unplayable: short.icu (NXDOMAIN) and
+  // play.zephyrflick.top (403 + X-Frame-Options blocks iframing).
+  private static readonly UNPLAYABLE_EMBED_HOSTS = /(?:short\.icu|zephyrflick\.)/i;
+
   // Build the anikai-shaped results for one language track. `directIframe` is
   // a player-only embed for this language (direct-HLS results point there;
   // embed results keep their own embed URL).
@@ -872,6 +876,12 @@ export class Animelok {
     }
 
     for (const e of track.embeds) {
+      // short.icu is NXDOMAIN (dead) and zephyrflick returns 403 + blocks
+      // framing (X-Frame-Options), so these embeds can never play — skip them
+      // rather than surface a server that always errors. (Languages whose only
+      // servers are these — e.g. hindi/tamil/telugu/malayalam on most titles —
+      // therefore drop out of the response entirely.)
+      if (this.UNPLAYABLE_EMBED_HOSTS.test(e.url)) continue;
       out.push({
         name: `Animelok ${e.server} (${display})`,
         iframe: e.url,
@@ -895,7 +905,7 @@ export class Animelok {
     const payload = await this.resolveStreams(parsed.anilistId, parsed.ep);
     if (!payload) return { isDub: false, results: [], languages: [] };
 
-    const languages = payload.languages.map((l) => l.toLowerCase());
+    const allLangs = payload.languages.map((l) => l.toLowerCase());
     const subtitles = payload.subtitles.map((s) => ({
       url: s.url,
       lang: s.lang ?? "English",
@@ -920,6 +930,13 @@ export class Animelok {
       const iframe = (players.find((p) => p.server === "anistream") ?? players[0]!).url;
       results.push(...this.buildLangResults(track, langUpper, iframe, subtitles));
     }
+
+    // Only report languages that actually produced a playable result. Dead
+    // short.icu/zephyrflick servers were dropped in buildLangResults, so a
+    // language with no real CDN (hindi/tamil/telugu/malayalam on most titles)
+    // disappears here instead of showing a server that always errors.
+    const present = new Set(results.map((r) => r.lang).filter(Boolean));
+    const languages = allLangs.filter((l) => present.has(l));
 
     const isDub = wantAll ? false : this.langForType(type) !== "JAPANESE";
     return {

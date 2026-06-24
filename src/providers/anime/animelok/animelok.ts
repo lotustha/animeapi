@@ -929,33 +929,41 @@ export class Animelok {
       if (!track) continue;
       const langLower = langUpper.toLowerCase();
       const display = this.titleCase(langUpper);
-      const players = this.embedPlayers(
-        parsed.anilistId,
-        parsed.ep,
-        langUpper === "ENGLISH",
-        payload.hianimeId,
-      )
-        .slice()
-        .sort((a, b) => {
-          const ai = PLAYER_PRIORITY.indexOf(a.server);
-          const bi = PLAYER_PRIORITY.indexOf(b.server);
-          return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
-        });
-      // Expose every watch-page player as its own server (priority-ordered) so
-      // the client can fall back when one player blocks a title.
-      for (const p of players) {
-        results.push({
-          name: `Animelok ${p.server} (${display})`,
-          iframe: p.url,
-          sources: [{ file: p.url, type: "iframe" }],
-          subtitles,
-          download: null,
-          lang: langLower,
-        });
+
+      // The embed players (vidnest/videasy/vidwish/megaplay) are animepahe-style
+      // SUB/DUB players — they only carry Japanese (sub) and English (dub).
+      // Attaching them to hindi/tamil/telugu/malayalam would wrongly play the
+      // Japanese sub, so only expose them for those two languages.
+      let primaryIframe = "";
+      if (langUpper === "JAPANESE" || langUpper === "ENGLISH") {
+        const players = this.embedPlayers(
+          parsed.anilistId,
+          parsed.ep,
+          langUpper === "ENGLISH",
+          payload.hianimeId,
+        )
+          .slice()
+          .sort((a, b) => {
+            const ai = PLAYER_PRIORITY.indexOf(a.server);
+            const bi = PLAYER_PRIORITY.indexOf(b.server);
+            return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+          });
+        for (const p of players) {
+          results.push({
+            name: `Animelok ${p.server} (${display})`,
+            iframe: p.url,
+            sources: [{ file: p.url, type: "iframe" }],
+            subtitles,
+            download: null,
+            lang: langLower,
+          });
+        }
+        primaryIframe = players[0]?.url ?? "";
       }
-      // Direct animelok stream (anvod m3u8) carried under the primary player's
-      // iframe, so its sources stay available for clients that play HLS directly.
-      const primaryIframe = players[0]?.url ?? "";
+
+      // animelok's own servers: embed servers (e.g. as-cdn21 for the regional
+      // languages) keep their own URL; direct m3u8 streams (anvod, jp/en) are
+      // carried under primaryIframe so their HLS sources stay available.
       results.push(...this.buildLangResults(track, langUpper, primaryIframe, subtitles));
     }
 

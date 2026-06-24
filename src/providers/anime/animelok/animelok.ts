@@ -918,17 +918,45 @@ export class Animelok {
       : payload.languages.filter((l) => l === this.langForType(type));
 
     const results: AnimelokStreamSource[] = [];
+    // Watch-page player priority. megaplay (anistream) copyright-blocks some dubs
+    // — e.g. One Piece dub returns a 410 "removed" page inside its player even
+    // though the stream exists — so it is no longer the default. vidnest
+    // (vidmaster) is the most reliable and isn't blocked, so it goes first; the
+    // rest stay as switchable fallback servers.
+    const PLAYER_PRIORITY = ["vidmaster", "aniplay", "vidstream", "anistream"];
     for (const langUpper of targetLangs) {
       const track = payload.tracks[langUpper];
       if (!track) continue;
+      const langLower = langUpper.toLowerCase();
+      const display = this.titleCase(langUpper);
       const players = this.embedPlayers(
         parsed.anilistId,
         parsed.ep,
         langUpper === "ENGLISH",
         payload.hianimeId,
-      );
-      const iframe = (players.find((p) => p.server === "anistream") ?? players[0]!).url;
-      results.push(...this.buildLangResults(track, langUpper, iframe, subtitles));
+      )
+        .slice()
+        .sort((a, b) => {
+          const ai = PLAYER_PRIORITY.indexOf(a.server);
+          const bi = PLAYER_PRIORITY.indexOf(b.server);
+          return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+        });
+      // Expose every watch-page player as its own server (priority-ordered) so
+      // the client can fall back when one player blocks a title.
+      for (const p of players) {
+        results.push({
+          name: `Animelok ${p.server} (${display})`,
+          iframe: p.url,
+          sources: [{ file: p.url, type: "iframe" }],
+          subtitles,
+          download: null,
+          lang: langLower,
+        });
+      }
+      // Direct animelok stream (anvod m3u8) carried under the primary player's
+      // iframe, so its sources stay available for clients that play HLS directly.
+      const primaryIframe = players[0]?.url ?? "";
+      results.push(...this.buildLangResults(track, langUpper, primaryIframe, subtitles));
     }
 
     // Only report languages that actually produced a playable result. Dead

@@ -7,7 +7,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
   // ─── Search ────────────────────────────────────────────────────────────────
   .get("/search/:query", async ({ params: { query }, query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `anizen:v2:search:${query}:${page}`;
+    const key = `anizen:v3:search:${query}:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -20,19 +20,19 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
 
   // ─── Spotlight ─────────────────────────────────────────────────────────────
   .get("/spotlight", async () => {
-    const cachedData = await Cache.get("anizen:v2:spotlight");
+    const cachedData = await Cache.get("anizen:v3:spotlight");
     if (cachedData) return { results: JSON.parse(cachedData) };
 
     const results = await Anizen.spotlight();
     if (results && results.length > 0) {
-      Cache.set("anizen:v2:spotlight", JSON.stringify(results), 43200);
+      Cache.set("anizen:v3:spotlight", JSON.stringify(results), 43200);
     }
     return { results };
   })
 
   // ─── Schedule ──────────────────────────────────────────────────────────────
   .get("/schedule/:date", async ({ params: { date } }) => {
-    const key = `anizen:v2:schedule:${date}`;
+    const key = `anizen:v3:schedule:${date}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return { results: JSON.parse(cachedData) };
 
@@ -45,7 +45,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
 
   // ─── Search Suggestions ────────────────────────────────────────────────────
   .get("/suggestions/:query", async ({ params: { query } }) => {
-    const key = `anizen:v2:suggestions:${query}`;
+    const key = `anizen:v3:suggestions:${query}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return { results: JSON.parse(cachedData) };
 
@@ -59,7 +59,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
   // ─── Recent Episodes (recently updated) ────────────────────────────────────
   .get("/recent-episodes", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `anizen:v2:recent-episodes:${page}`;
+    const key = `anizen:v3:recent-episodes:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -73,7 +73,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
   // ─── Recently Added ────────────────────────────────────────────────────────
   .get("/recent-added", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `anizen:v2:recent-added:${page}`;
+    const key = `anizen:v3:recent-added:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -87,7 +87,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
   // ─── Latest Completed ──────────────────────────────────────────────────────
   .get("/completed", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `anizen:v2:completed:${page}`;
+    const key = `anizen:v3:completed:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -101,7 +101,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
   // ─── New Releases ──────────────────────────────────────────────────────────
   .get("/new-releases", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `anizen:v2:new-releases:${page}`;
+    const key = `anizen:v3:new-releases:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -115,7 +115,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
   // ─── Movies ────────────────────────────────────────────────────────────────
   .get("/movies", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `anizen:v2:movies:${page}`;
+    const key = `anizen:v3:movies:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -129,7 +129,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
   // ─── TV ────────────────────────────────────────────────────────────────────
   .get("/tv", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `anizen:v2:tv:${page}`;
+    const key = `anizen:v3:tv:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -143,7 +143,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
   // ─── OVA ───────────────────────────────────────────────────────────────────
   .get("/ova", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `anizen:v2:ova:${page}`;
+    const key = `anizen:v3:ova:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -157,7 +157,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
   // ─── ONA ───────────────────────────────────────────────────────────────────
   .get("/ona", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `anizen:v2:ona:${page}`;
+    const key = `anizen:v3:ona:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -171,7 +171,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
   // ─── Specials ──────────────────────────────────────────────────────────────
   .get("/specials", async ({ query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `anizen:v2:specials:${page}`;
+    const key = `anizen:v3:specials:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -184,7 +184,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
 
   // ─── Genre List ────────────────────────────────────────────────────────────
   .get("/genres", async () => {
-    const key = `anizen:v2:genres`;
+    const key = `anizen:v3:genres`;
     const cachedData = await Cache.get(key);
     if (cachedData) return { results: JSON.parse(cachedData) };
 
@@ -198,7 +198,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
   // ─── By Genre ──────────────────────────────────────────────────────────────
   .get("/genre/:genre", async ({ params: { genre }, query: qs }) => {
     const page = parseInt(qs?.page as string) || 1;
-    const key = `anizen:v2:genre:${genre}:${page}`;
+    const key = `anizen:v3:genre:${genre}:${page}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -216,7 +216,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
       return { message: "id is required" };
     }
 
-    const key = `anizen:v2:info:${id}`;
+    const key = `anizen:v3:info:${id}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 

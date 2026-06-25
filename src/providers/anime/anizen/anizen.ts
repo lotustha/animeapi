@@ -38,14 +38,25 @@ export class Anizen {
     return Number.isFinite(n) ? n : 0;
   }
 
+  // Upstream is mid-migration and leaks several unreachable hosts in its JSON.
+  // Rewrite them all to cdn.anizen.tr (verified reachable, path-compatible)
+  // before parsing so every surfaced poster/player/embed URL works:
+  //   - aniapi.anizen.tr   → old NXDOMAIN host still hardcoded in some URLs
+  //   - cdn.slay-knight.xyz → dead poster CDN used by /api/home + /api/info
+  //   - http://127.0.0.1:<port> / localhost → internal player host leaked in
+  //     /api/stream link.file + server embeds (the iframe-not-loading bug)
+  private static rewriteHosts(text: string): string {
+    return text
+      .replaceAll("aniapi.anizen.tr", "cdn.anizen.tr")
+      .replaceAll("cdn.slay-knight.xyz", "cdn.anizen.tr")
+      .replace(/https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?/gi, "https://cdn.anizen.tr");
+  }
+
   private static async getJson<T = any>(path: string): Promise<T | null> {
     try {
       const res = await fetch(`${this.api}${path}`, { headers: this.headers() });
       if (!res.ok) return null;
-      // Upstream renamed its host aniapi.anizen.tr → cdn.anizen.tr, but its JSON
-      // still hardcodes the old (now NXDOMAIN) host in poster/player/embed URLs.
-      // Rewrite it everywhere before parsing so every surfaced URL is reachable.
-      const text = (await res.text()).replaceAll("aniapi.anizen.tr", "cdn.anizen.tr");
+      const text = this.rewriteHosts(await res.text());
       return JSON.parse(text) as T;
     } catch (err) {
       Logger.error(`Anizen getJson error for ${path}: ${String(err)}`);

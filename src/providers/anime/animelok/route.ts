@@ -313,7 +313,7 @@ export const animelokRoutes = new Elysia({ prefix: "/animelok" })
     }
 
     const type = qs?.type as string | undefined;
-    const key = `animelok:v3:watch:${episodeId}:${type ?? "all"}`;
+    const key = `animelok:v4:watch:${episodeId}:${type ?? "all"}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 

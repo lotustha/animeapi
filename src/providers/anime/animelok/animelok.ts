@@ -898,12 +898,45 @@ export class Animelok {
   // Returns EVERY audio language's streams by default (each result tagged with
   // `lang`). Pass ?type= to filter: sub|dub (= japanese|english) or
   // hindi|tamil|telugu|malayalam. `type=all` is also the everything view.
+  // Fallback when animelok's own stream API yields nothing for an episode (e.g.
+  // freshly-listed episodes it hasn't indexed yet — the episode still appears in
+  // the list with a thumbnail). The embed players resolve from AniList id +
+  // episode number directly (vidnest = animepahe/{anilistId}/{ep}), so they play
+  // even before animelok indexes the stream. Mirrors the JAPANESE/ENGLISH branch
+  // of streams() — vidnest only, the one server confirmed to play.
+  private static embedFallback(
+    anilistId: string,
+    ep: number,
+    type?: string,
+  ): AnimelokStreamResponse {
+    const wantAll = !type || type.toLowerCase() === "all";
+    const wantDub = !wantAll && this.langForType(type) === "ENGLISH";
+    const players = this.embedPlayers(anilistId, ep, wantDub, null);
+    const vidnest = players.find((p) => p.server === "vidmaster") ?? players[0];
+    if (!vidnest) return { isDub: wantDub, results: [], languages: [] };
+    const lang = wantDub ? "english" : "japanese";
+    return {
+      isDub: wantDub,
+      results: [
+        {
+          name: `Animelok vidmaster (${wantDub ? "English" : "Japanese"})`,
+          iframe: vidnest.url,
+          sources: [{ file: vidnest.url, type: "iframe" }],
+          subtitles: [],
+          download: null,
+          lang,
+        },
+      ],
+      languages: [lang],
+    };
+  }
+
   static async streams(episodeId: string, type?: string): Promise<AnimelokStreamResponse> {
     const parsed = this.parseEpisodeId(episodeId);
     if (!parsed) return { isDub: false, results: [] };
 
     const payload = await this.resolveStreams(parsed.anilistId, parsed.ep);
-    if (!payload) return { isDub: false, results: [], languages: [] };
+    if (!payload) return this.embedFallback(parsed.anilistId, parsed.ep, type);
 
     const allLangs = payload.languages.map((l) => l.toLowerCase());
     const subtitles = payload.subtitles.map((s) => ({

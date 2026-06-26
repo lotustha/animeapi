@@ -1,3 +1,4 @@
+import { SERVER_ORIGIN } from "../../../core/config.js";
 import { Logger } from "../../../core/logger.js";
 import { proxifySource } from "../../../core/proxy.js";
 import {
@@ -981,11 +982,16 @@ export class Animelok {
           });
         }
       } else {
-        // Regional languages (hindi/tamil/telugu/malayalam): animelok's own
-        // embeds only — the zephyrflick "Multi" player (dead short.icu dropped
-        // in buildLangResults). The sub/dub embed players don't carry these
-        // audio tracks.
-        results.push(...this.buildLangResults(track, langUpper, "", subtitles));
+        // Regional languages (hindi/tamil/telugu/malayalam) usually come as a
+        // direct HLS stream (no embed iframe). The app's player is WebView-only,
+        // so point these at the self-hosted hls.js player page — otherwise the
+        // result has an empty iframe, gets dropped client-side, and the language
+        // silently falls back to Japanese. The player page plays the proxied/
+        // direct m3u8 for this exact language.
+        const playerIframe = `${SERVER_ORIGIN}/anime/animelok/player/${encodeURIComponent(
+          episodeId,
+        )}?type=${langLower}`;
+        results.push(...this.buildLangResults(track, langUpper, playerIframe, subtitles));
       }
     }
 

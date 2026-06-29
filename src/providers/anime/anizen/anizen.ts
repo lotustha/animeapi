@@ -1,3 +1,4 @@
+import * as cheerio from "cheerio";
 import { Logger } from "../../../core/logger.js";
 import { anizen as anizenOrigin, anizen_api as anizenApi } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
@@ -64,6 +65,28 @@ export class Anizen {
     }
   }
 
+  // Fetches an SSR HTML page off the public frontend (anizen.tr). Used for
+  // search, whose JSON API (cdn.anizen.tr/api/search) is broken upstream and
+  // returns empty `data` for every keyword — the only working surface is the
+  // server-rendered /search page.
+  private static async getHtml(path: string): Promise<string | null> {
+    try {
+      const res = await fetch(`${this.site}${path}`, {
+        headers: {
+          "User-Agent": USER_AGENT,
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          Referer: `${this.site}/`,
+        },
+      });
+      if (!res.ok) return null;
+      return await res.text();
+    } catch (err) {
+      Logger.error(`Anizen getHtml error for ${path}: ${String(err)}`);
+      return null;
+    }
+  }
+
   // ─── Card / Search mapping ──────────────────────────────────────────────────
 
   private static mapCard(item: any): AnizenSearchItem | null {
@@ -112,13 +135,69 @@ export class Anizen {
 
   // ─── Search ─────────────────────────────────────────────────────────────────
 
+  // Parses the SSR /search result grid. Each card is an
+  //   <a href="/watch/<slug>" data-anime-id="<slug>" data-data-id="<short>">
+  // wrapping a poster <img>, sub/dub badges (span.inline-flex: CC = sub,
+  // microphone = dub), an <h3 title="…"> and a <p> whose first <span> is the
+  // show type. Pagination shows as "Page <n> / <total>".
+  private static parseSearchHtml(html: string, page: number): AnizenPagedResult<AnizenSearchItem> {
+    const $ = cheerio.load(html);
+    const results: AnizenSearchItem[] = [];
+
+    $("a[data-anime-id]").each((_, el) => {
+      const a = $(el);
+      const id = (a.attr("data-anime-id") ?? "").trim();
+      if (!id) return;
+      const h3 = a.find("h3").first();
+      const title = (h3.attr("title") ?? h3.text() ?? "").trim();
+      if (!title) return;
+
+      let sub = 0;
+      let dub = 0;
+      a.find("span.inline-flex").each((__, s) => {
+        const sp = $(s);
+        const num = this.toInt(sp.find("span").last().text());
+        if (sp.find("i.fa-microphone").length > 0) dub = num;
+        else if (/CC/.test(sp.text())) sub = num;
+      });
+
+      results.push({
+        id,
+        title,
+        url: `${this.site}/details/${id}`,
+        image: a.find("img").first().attr("src") ?? undefined,
+        japaneseTitle: null,
+        type: a.find("p span").first().text().trim(),
+        sub,
+        dub,
+        episodes: Math.max(sub, dub),
+      });
+    });
+
+    let totalPages = 0;
+    $("span").each((_, s) => {
+      const m = /^Page\s+\d+\s*\/\s*(\d+)$/.exec($(s).text().replace(/\s+/g, " ").trim());
+      if (m) totalPages = this.toInt(m[1]);
+    });
+
+    const currentPage = results.length === 0 ? 0 : page;
+    const hasNextPage = currentPage > 0 && totalPages > 0 ? currentPage < totalPages : false;
+    return {
+      currentPage,
+      hasNextPage,
+      totalPages: results.length === 0 ? 0 : totalPages,
+      results,
+    };
+  }
+
   static async search(query: string, page = 1): Promise<AnizenPagedResult<AnizenSearchItem>> {
     if (!query) return { currentPage: 0, hasNextPage: false, totalPages: 0, results: [] };
     const p = page > 0 ? page : 1;
-    const raw = await this.getJson(
-      `/api/search?keyword=${encodeURIComponent(query)}&page=${p}`,
+    const html = await this.getHtml(
+      `/search?keyword=${encodeURIComponent(query)}&page=${p}`,
     );
-    return this.mapPaged(raw, p);
+    if (!html) return { currentPage: 0, hasNextPage: false, totalPages: 0, results: [] };
+    return this.parseSearchHtml(html, p);
   }
 
   static async suggestions(query: string): Promise<AnizenSuggestionItem[]> {

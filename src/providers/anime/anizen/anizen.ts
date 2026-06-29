@@ -107,32 +107,6 @@ export class Anizen {
     };
   }
 
-  private static mapPaged(
-    raw: any,
-    page: number,
-  ): AnizenPagedResult<AnizenSearchItem> {
-    const data = raw?.results?.data ?? [];
-    const list = Array.isArray(data) ? data : [];
-    const totalPages =
-      this.toInt(raw?.results?.totalPage) ||
-      this.toInt(raw?.results?.totalPages) ||
-      (list.length ? page : 0);
-    const currentPage = list.length === 0 ? 0 : page;
-    const hasNextPage =
-      typeof raw?.results?.hasNextPage === "boolean"
-        ? raw.results.hasNextPage
-        : currentPage > 0 && currentPage < totalPages;
-    const results = list
-      .map((it) => this.mapCard(it))
-      .filter((it): it is AnizenSearchItem => it !== null);
-    return {
-      currentPage,
-      hasNextPage,
-      totalPages: results.length === 0 ? 0 : totalPages,
-      results,
-    };
-  }
-
   // ─── Search ─────────────────────────────────────────────────────────────────
 
   // Parses the SSR /search result grid. Each card is an
@@ -210,42 +184,50 @@ export class Anizen {
 
   // ─── Filter-backed browse endpoints ─────────────────────────────────────────
 
-  private static async filter(
-    params: Record<string, string | number>,
+  // The JSON /api/filter is dead the same way /api/search is — it returns an
+  // empty `data` array (with a non-zero totalPage) for every type/status/genre.
+  // The SSR /genre/<slug> page is the only working browse surface; it renders
+  // the same card grid search does, so reuse parseSearchHtml. The route accepts
+  // genre slugs, the show-type tokens (movie/tv/ova/specials) and status tokens
+  // (currently-airing/finished-airing/recently-added).
+  private static async filterHtml(
+    slug: string,
     page: number,
   ): Promise<AnizenPagedResult<AnizenSearchItem>> {
+    const empty = { currentPage: 0, hasNextPage: false, totalPages: 0, results: [] };
+    if (!slug) return empty;
     const p = page > 0 ? page : 1;
-    const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
-    qs.set("page", String(p));
-    const raw = await this.getJson(`/api/filter?${qs.toString()}`);
-    return this.mapPaged(raw, p);
+    const html = await this.getHtml(`/genre/${encodeURIComponent(slug)}?page=${p}`);
+    if (!html) return empty;
+    return this.parseSearchHtml(html, p);
   }
 
   static movies(page = 1) {
-    return this.filter({ type: "movie" }, page);
+    return this.filterHtml("movie", page);
   }
   static tv(page = 1) {
-    return this.filter({ type: "tv" }, page);
+    return this.filterHtml("tv", page);
   }
   static ova(page = 1) {
-    return this.filter({ type: "ova" }, page);
+    return this.filterHtml("ova", page);
   }
-  static ona(page = 1) {
-    return this.filter({ type: "ona" }, page);
+  // Upstream has no working ONA browse: /genre/ona (and /genre/onas) fall back
+  // to a fuzzy name match that returns mostly TV-typed shows, not ONAs. Return
+  // empty rather than surface wrong-typed results under an "ona" label.
+  static ona(_page = 1): Promise<AnizenPagedResult<AnizenSearchItem>> {
+    return Promise.resolve({ currentPage: 0, hasNextPage: false, totalPages: 0, results: [] });
   }
   static specials(page = 1) {
-    return this.filter({ type: "special" }, page);
+    return this.filterHtml("specials", page);
   }
   static newReleases(page = 1) {
-    return this.filter({ status: "Currently Airing", sort: "new" }, page);
+    return this.filterHtml("currently-airing", page);
   }
   static latestCompleted(page = 1) {
-    return this.filter({ status: "Finished Airing" }, page);
+    return this.filterHtml("finished-airing", page);
   }
   static genreSearch(genre: string, page = 1) {
-    if (!genre) return Promise.resolve({ currentPage: 0, hasNextPage: false, totalPages: 0, results: [] });
-    return this.filter({ genres: genre }, page);
+    return this.filterHtml(genre, page);
   }
 
   // ─── Home cache (shared by spotlight + recent endpoints) ────────────────────
@@ -358,7 +340,7 @@ export class Anizen {
   }
 
   static recentlyAdded(page = 1) {
-    return this.filter({ sort: "new" }, page);
+    return this.filterHtml("recently-added", page);
   }
 
   // ─── Genres list ────────────────────────────────────────────────────────────

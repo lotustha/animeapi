@@ -20,12 +20,13 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
 
   // ─── Spotlight ─────────────────────────────────────────────────────────────
   .get("/spotlight", async () => {
-    const cachedData = await Cache.get("anizen:v3:spotlight");
+    // Short TTL: spotlight sub/dub counts move daily as new episodes air.
+    const cachedData = await Cache.get("anizen:v4:spotlight");
     if (cachedData) return { results: JSON.parse(cachedData) };
 
     const results = await Anizen.spotlight();
     if (results && results.length > 0) {
-      Cache.set("anizen:v3:spotlight", JSON.stringify(results), 43200);
+      Cache.set("anizen:v4:spotlight", JSON.stringify(results), 3600);
     }
     return { results };
   })
@@ -216,7 +217,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
       return { message: "id is required" };
     }
 
-    const key = `anizen:v3:info:${id}`;
+    const key = `anizen:v4:info:${id}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -226,7 +227,16 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
       return { message: "Anime not found" };
     }
 
-    Cache.set(key, JSON.stringify(res), 86400 * 3);
+    // A 3-day TTL poisons new/airing shows: an entry cached before an episode
+    // is indexed keeps saying "no episodes" for days. Cache empty episode
+    // lists briefly and airing shows hourly; only finished shows get 3 days.
+    const ttl =
+      res.episodes.length === 0
+        ? 300
+        : /currently airing/i.test(res.status ?? "")
+          ? 3600
+          : 86400 * 3;
+    Cache.set(key, JSON.stringify(res), ttl);
     return res;
   })
 

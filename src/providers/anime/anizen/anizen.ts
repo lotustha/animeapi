@@ -379,6 +379,13 @@ export class Anizen {
     const raw = await this.getJson(`/api/info?id=${encodeURIComponent(slug)}`);
     const data = raw?.results?.data;
     if (!data || !data.id) return null;
+    // Upstream /api/info fuzzy-matches ids it doesn't know to a *different*
+    // anime instead of 404ing (a not-yet-indexed spotlight slug comes back as
+    // a random show). Only trust responses that echo the requested id.
+    if (data.id !== slug) {
+      Logger.warn(`Anizen info id mismatch: requested "${slug}", upstream returned "${data.id}"`);
+      return null;
+    }
 
     const animeInfo = data.animeInfo ?? {};
     const tv = animeInfo.tvInfo ?? {};
@@ -481,14 +488,18 @@ export class Anizen {
   // Upstream's streamingLink.file is a /player/<token> page on aniapi.anizen.tr
   // that wraps a megacloud-style iframe. Resolve it down to the actual m3u8:
   //   1. GET /player/<token>/resolve with X-Requested-With: ZenPlayer
-  //        → { url: "https://vidwish.live/stream/s-2/<realId>/<sub|dub>" }
+  //        → { url: "https://megaplay.buzz/stream/s-2/<realId>/<sub|dub>" }
   //   2. GET that page, scrape data-id="<fileId>" off #megaplay-player
-  //   3. GET https://megaplay.buzz/stream/getSources?id=<fileId>
+  //   3. GET <inner host>/stream/getSources?id=<fileId>
   //        → { sources:{file:<m3u8>}, tracks:[...], intro, outro }
-  // The CDN that serves the m3u8 hard-checks Referer: https://megaplay.buzz/
-  // (every other referer gets 403), so the m3u8 MUST be proxied for clients.
+  // The inner player is mirrored across megaplay.buzz and vidwish.live (same
+  // /stream/s-2/<id>/<type> paths), and /resolve sometimes hands out the dead
+  // mirror (vidwish serves an error page for files megaplay has) — so try the
+  // given host first, then its mirror. The CDN that serves the m3u8
+  // hard-checks the Referer of whichever mirror produced it (every other
+  // referer gets 403), so clients MUST send the returned referer.
 
-  private static readonly PLAYER_REFERER = "https://megaplay.buzz/";
+  private static readonly PLAYER_MIRROR_HOSTS = ["megaplay.buzz", "vidwish.live"];
 
   private static isPlayerUrl(url: string): boolean {
     return /^https?:\/\/[^/]*(?:aniapi|cdn)\.anizen\.[a-z]+\/player\//i.test(url);
@@ -496,6 +507,7 @@ export class Anizen {
 
   private static async resolvePlayer(playerUrl: string): Promise<{
     m3u8: string;
+    referer: string;
     subtitles: { file: string; label?: string; kind?: string; default?: boolean }[];
     intro?: { start: number; end: number };
     outro?: { start: number; end: number };
@@ -514,7 +526,43 @@ export class Anizen {
       const innerUrl = resolveJson?.url;
       if (!innerUrl) return null;
 
-      // 2. Inner page → data-id
+      // 2+3 on the given host, then on its mirror.
+      const candidates = [innerUrl];
+      try {
+        const u = new URL(innerUrl);
+        if (this.PLAYER_MIRROR_HOSTS.includes(u.host)) {
+          for (const host of this.PLAYER_MIRROR_HOSTS) {
+            if (host === u.host) continue;
+            const alt = new URL(innerUrl);
+            alt.host = host;
+            candidates.push(alt.toString());
+          }
+        }
+      } catch {
+        /* not a parseable URL — try it as-is */
+      }
+
+      for (const candidate of candidates) {
+        const resolved = await this.resolveInnerPlayer(candidate);
+        if (resolved) return resolved;
+      }
+      return null;
+    } catch (err) {
+      Logger.error(`Anizen resolvePlayer error for ${playerUrl}: ${String(err)}`);
+      return null;
+    }
+  }
+
+  // Steps 2+3 of the chain against one mirror: scrape data-id off the inner
+  // player page, then call that same host's getSources.
+  private static async resolveInnerPlayer(innerUrl: string): Promise<{
+    m3u8: string;
+    referer: string;
+    subtitles: { file: string; label?: string; kind?: string; default?: boolean }[];
+    intro?: { start: number; end: number };
+    outro?: { start: number; end: number };
+  } | null> {
+    try {
       const pageRes = await fetch(innerUrl, {
         headers: { "User-Agent": USER_AGENT, Referer: `${this.site}/` },
       });
@@ -526,17 +574,14 @@ export class Anizen {
       const fileId = idMatch?.[1];
       if (!fileId) return null;
 
-      // 3. getSources → m3u8 + tracks + intro/outro
-      const srcRes = await fetch(
-        `https://megaplay.buzz/stream/getSources?id=${fileId}`,
-        {
-          headers: {
-            "User-Agent": USER_AGENT,
-            Referer: innerUrl,
-            "X-Requested-With": "XMLHttpRequest",
-          },
+      const origin = new URL(innerUrl).origin;
+      const srcRes = await fetch(`${origin}/stream/getSources?id=${fileId}`, {
+        headers: {
+          "User-Agent": USER_AGENT,
+          Referer: innerUrl,
+          "X-Requested-With": "XMLHttpRequest",
         },
-      );
+      });
       if (!srcRes.ok) return null;
       const data = (await srcRes.json()) as any;
       const file: string | undefined = data?.sources?.file;
@@ -561,11 +606,19 @@ export class Anizen {
           ? { start: this.toInt(data.outro.start), end: this.toInt(data.outro.end) }
           : undefined;
 
-      return { m3u8: file, subtitles, intro, outro };
-    } catch (err) {
-      Logger.error(`Anizen resolvePlayer error for ${playerUrl}: ${String(err)}`);
+      return { m3u8: file, referer: `${origin}/`, subtitles, intro, outro };
+    } catch {
       return null;
     }
+  }
+
+  // Upstream's `servers` array mixes every audio variant (hsub/ssub/dub) in
+  // one list no matter which `type` was requested — filter before labeling,
+  // or a sub request surfaces dub embeds tagged "(HardSub)".
+  private static serverMatchesType(s: any, t: "sub" | "dub"): boolean {
+    const st = String(s?.type ?? "").toLowerCase();
+    if (!st) return true;
+    return t === "dub" ? st === "dub" : st !== "dub";
   }
 
   static async fetchEpisodeServers(
@@ -576,7 +629,9 @@ export class Anizen {
     if (!parsed) return [];
     const type = this.normalizeType(subOrDub);
     const raw = await this.fetchStream(parsed.slug, parsed.ep, type);
-    const servers = Array.isArray(raw?.results?.servers) ? raw.results.servers : [];
+    const servers = (Array.isArray(raw?.results?.servers) ? raw.results.servers : []).filter(
+      (s: any) => this.serverMatchesType(s, type),
+    );
     const link = raw?.results?.streamingLink;
     const intro = Array.isArray(link?.intro) ? link.intro : [0, 0];
     const outro = Array.isArray(link?.outro) ? link.outro : [0, 0];
@@ -605,7 +660,9 @@ export class Anizen {
     const t = this.normalizeType(type);
     const raw = await this.fetchStream(parsed.slug, parsed.ep, t);
     const link = raw?.results?.streamingLink;
-    const servers = Array.isArray(raw?.results?.servers) ? raw.results.servers : [];
+    const servers = (Array.isArray(raw?.results?.servers) ? raw.results.servers : []).filter(
+      (s: any) => this.serverMatchesType(s, t),
+    );
 
     const suffix = t === "dub" ? " (Dub)" : " (HardSub)";
     const results: AnizenStreamSource[] = [];
@@ -613,6 +670,7 @@ export class Anizen {
 
     let resolvedIntro: [number, number] | null = null;
     let resolvedOutro: [number, number] | null = null;
+    let haveHls = false;
 
     if (link?.link?.file) {
       const name = `Anizen ${link.server ?? "primary"}${suffix}`;
@@ -647,10 +705,11 @@ export class Anizen {
             sources: [{ file: resolved.m3u8, type: "hls" }],
             subtitles,
             download: null,
-            headers: { Referer: this.PLAYER_REFERER },
+            headers: { Referer: resolved.referer },
           });
           if (resolved.intro) resolvedIntro = [resolved.intro.start, resolved.intro.end];
           if (resolved.outro) resolvedOutro = [resolved.outro.start, resolved.outro.end];
+          haveHls = true;
         } else {
           // Resolver failed (network/upstream change); surface the iframe so
           // the client at least has something to render.
@@ -670,6 +729,7 @@ export class Anizen {
           subtitles: upstreamSubs,
           download: null,
         });
+        haveHls = isAlreadyHls;
       }
     }
 
@@ -678,6 +738,33 @@ export class Anizen {
       const sName = s.serverName ?? s.server_name ?? "unknown";
       if (seen.has(sName)) continue;
       seen.add(sName);
+
+      // The primary chain came up iframe-only; these embeds are /player/
+      // pages on the same resolver, so try to turn one of them into a real
+      // m3u8 before settling for iframes.
+      if (!haveHls && this.isPlayerUrl(s.embed)) {
+        const resolved = await this.resolvePlayer(s.embed);
+        if (resolved) {
+          results.unshift({
+            name: `Anizen ${sName}${suffix}`,
+            iframe: s.embed,
+            sources: [{ file: resolved.m3u8, type: "hls" }],
+            subtitles: resolved.subtitles.map((tr) => ({
+              url: tr.file,
+              lang: tr.label ?? tr.kind ?? undefined,
+              type: t === "dub" ? "none" : "soft",
+            })),
+            download: null,
+            headers: { Referer: resolved.referer },
+          });
+          if (resolved.intro && !resolvedIntro)
+            resolvedIntro = [resolved.intro.start, resolved.intro.end];
+          if (resolved.outro && !resolvedOutro)
+            resolvedOutro = [resolved.outro.start, resolved.outro.end];
+          haveHls = true;
+          continue;
+        }
+      }
 
       results.push({
         name: `Anizen ${sName}${suffix}`,

@@ -621,6 +621,18 @@ export class Anizen {
     return t === "dub" ? st === "dub" : st !== "dub";
   }
 
+  // Label by the stream's *actual* upstream type: "sub"/"ssub" carry VTT
+  // tracks (softsub), "hsub" has subs burned into the video. Labeling
+  // everything "(HardSub)" made softsub streams look like they lost their
+  // subtitles and hardsub ones look like subs were missing entirely.
+  private static typeSuffix(st: unknown, fallback: "sub" | "dub"): string {
+    const v = String(st ?? "").toLowerCase();
+    if (v === "dub") return " (Dub)";
+    if (v === "hsub") return " (HardSub)";
+    if (v === "sub" || v === "ssub") return " (SoftSub)";
+    return fallback === "dub" ? " (Dub)" : " (HardSub)";
+  }
+
   static async fetchEpisodeServers(
     episodeId: string,
     subOrDub: "softsub" | "dub" | "hardsub" = "hardsub",
@@ -635,13 +647,12 @@ export class Anizen {
     const link = raw?.results?.streamingLink;
     const intro = Array.isArray(link?.intro) ? link.intro : [0, 0];
     const outro = Array.isArray(link?.outro) ? link.outro : [0, 0];
-    const suffix = type === "dub" ? " (Dub)" : " (HardSub)";
     return servers
       .map((s: any): AnizenServer | null => {
         if (!s?.embed) return null;
         const baseName = s.serverName ?? s.server_name ?? "unknown";
         return {
-          name: `anizen ${baseName}${suffix}`.toLowerCase(),
+          name: `anizen ${baseName}${this.typeSuffix(s.type, type)}`.toLowerCase(),
           url: s.embed,
           isDub: type === "dub",
           intro: { start: this.toInt(intro[0]), end: this.toInt(intro[1]) },
@@ -664,7 +675,6 @@ export class Anizen {
       (s: any) => this.serverMatchesType(s, t),
     );
 
-    const suffix = t === "dub" ? " (Dub)" : " (HardSub)";
     const results: AnizenStreamSource[] = [];
     const seen = new Set<string>();
 
@@ -673,7 +683,7 @@ export class Anizen {
     let haveHls = false;
 
     if (link?.link?.file) {
-      const name = `Anizen ${link.server ?? "primary"}${suffix}`;
+      const name = `Anizen ${link.server ?? "primary"}${this.typeSuffix(link.type, t)}`;
       seen.add(link.server ?? "");
       const upstreamTracks = Array.isArray(link.tracks) ? link.tracks : [];
       const upstreamSubs = upstreamTracks
@@ -746,7 +756,7 @@ export class Anizen {
         const resolved = await this.resolvePlayer(s.embed);
         if (resolved) {
           results.unshift({
-            name: `Anizen ${sName}${suffix}`,
+            name: `Anizen ${sName}${this.typeSuffix(s.type, t)}`,
             iframe: s.embed,
             sources: [{ file: resolved.m3u8, type: "hls" }],
             subtitles: resolved.subtitles.map((tr) => ({
@@ -767,7 +777,7 @@ export class Anizen {
       }
 
       results.push({
-        name: `Anizen ${sName}${suffix}`,
+        name: `Anizen ${sName}${this.typeSuffix(s.type, t)}`,
         iframe: s.embed,
         sources: [{ file: s.embed, type: "iframe" }],
         subtitles: [],

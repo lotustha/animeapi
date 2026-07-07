@@ -21,3 +21,6 @@ jobs:
             # so the pull always goes through.
             git stash
             git pull origin main
+            # pm2 runs `bun run src/index.ts` with watch disabled — the new
+            # code isn't served until the process restarts.
+            pm2 restart mugen-api

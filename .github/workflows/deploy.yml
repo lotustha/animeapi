@@ -16,4 +16,8 @@ jobs:
           password: ${{ secrets.VPS_PASSWORD }}
           script: |
             cd /www/wwwroot/api.mugenstream.fun
+            # Hand-edits on the VPS abort `git pull` and silently block every
+            # deploy. Park them in the stash (recoverable via `git stash list`)
+            # so the pull always goes through.
+            git stash
             git pull origin main

@@ -195,8 +195,8 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/anikoto/genres                 → Available genres",
           "GET /anime/anikoto/genre/:genre           → Browse by genre",
           "GET /anime/anikoto/info/:id               → Full title details + episodes",
-          "GET /anime/anikoto/watch/:episodeId       → Decrypted m3u8 sources + Referer header (query: type=sub|dub)",
-          "GET /anime/anikoto/servers/:episodeId     → Episode servers (query: type)",
+          "GET /anime/anikoto/watch/:episodeId       → Decrypted m3u8 sources + Referer header (query: type=softsub|hardsub|dub)",
+          "GET /anime/anikoto/servers/:episodeId     → Episode servers (query: type=softsub|hardsub|dub)",
         ],
 
         animelok: [

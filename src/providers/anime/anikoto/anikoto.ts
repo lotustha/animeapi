@@ -55,7 +55,10 @@ export class Anikoto {
   private static parseSlug(href: string | undefined): string {
     if (!href) return "";
     const after = href.split("/watch/")[1] ?? href;
-    return after.replace(/^\//, "").replace(/\/ep-\d+\/?$/i, "").replace(/\/$/, "");
+    return after
+      .replace(/^\//, "")
+      .replace(/\/ep-\d+\/?$/i, "")
+      .replace(/\/$/, "");
   }
 
   // ─── Card / Pagination Scraper ───────────────────────────────────────────────
@@ -92,9 +95,7 @@ export class Anikoto {
     };
   }
 
-  private static async scrapeCardPage(
-    url: string,
-  ): Promise<AnikotoPagedResult<AnikotoSearchItem>> {
+  private static async scrapeCardPage(url: string): Promise<AnikotoPagedResult<AnikotoSearchItem>> {
     try {
       const res = await fetch(url, { headers: this.headers() });
       const html = await res.text();
@@ -109,8 +110,7 @@ export class Anikoto {
         });
 
       const pag = $("ul.pagination").first();
-      const currentPage =
-        this.toInt(pag.find(".page-item.active a.page-link").text()) || 1;
+      const currentPage = this.toInt(pag.find(".page-item.active a.page-link").text()) || 1;
       const hasNextPage = pag.find("a.page-link[rel='next']").length > 0;
       let totalPages = currentPage;
       pag.find("a.page-link[href]").each((_, e) => {
@@ -132,10 +132,7 @@ export class Anikoto {
 
   // ─── Browsing Endpoints ──────────────────────────────────────────────────────
 
-  static async search(
-    query: string,
-    page = 1,
-  ): Promise<AnikotoPagedResult<AnikotoSearchItem>> {
+  static async search(query: string, page = 1): Promise<AnikotoPagedResult<AnikotoSearchItem>> {
     if (page <= 0) page = 1;
     return this.scrapeCardPage(
       `${this.baseUrl}/filter?keyword=${encodeURIComponent(query)}&page=${page}`,
@@ -156,9 +153,9 @@ export class Anikoto {
     return this.scrapeCardPage(`${this.baseUrl}/new-release?page=${page}`);
   }
 
-  // anikoto has no distinct "recently added" feed; new-release is the closest.
   static async recentlyAdded(page = 1): Promise<AnikotoPagedResult<AnikotoSearchItem>> {
-    return this.newReleases(page);
+    if (page <= 0) page = 1;
+    return this.scrapeCardPage(`${this.baseUrl}/filter?sort=latest-added&page=${page}`);
   }
 
   static async mostViewed(page = 1): Promise<AnikotoPagedResult<AnikotoSearchItem>> {
@@ -207,9 +204,11 @@ export class Anikoto {
 
   // ─── Genres ─────────────────────────────────────────────────────────────────
 
+  // The genre menu lives on /home — the bare / is a splash landing page with
+  // no nav, no slider, and no genre links.
   static async genres(): Promise<string[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/`, { headers: this.headers() });
+      const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers() });
       const $ = cheerio.load(await res.text());
       const set = new Set<string>();
       $("a[href*='/genre/']").each((_, el) => {
@@ -225,9 +224,13 @@ export class Anikoto {
 
   // ─── Spotlight (homepage swiper) ──────────────────────────────────────────────
 
+  // The slider (#hotest) is only rendered on /home; the bare / is a splash
+  // landing page. Output mirrors anizen's spotlight shape — the slider carries
+  // no episode counts, so sub/dub are presence flags (1/0), and it exposes no
+  // show type or genre list.
   static async spotlight(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/`, { headers: this.headers() });
+      const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers() });
       const $ = cheerio.load(await res.text());
       const results: any[] = [];
       $(".swiper-slide.item").each((_, el) => {
@@ -243,11 +246,12 @@ export class Anikoto {
           japaneseTitle: titleEl.attr("data-jp")?.trim() || null,
           banner: bg.match(/url\(['"]?(.+?)['"]?\)/)?.[1] || null,
           url: `${this.baseUrl}/watch/${slug}`,
-          rating: card.find(".meta.icons i.rating").text().trim() || null,
-          quality: card.find(".meta.icons i.quality").text().trim() || null,
-          releaseDate: card.find(".meta.icons i.date").text().trim() || null,
-          hasSub: card.find(".meta.icons i.sub").length > 0,
-          hasDub: card.find(".meta.icons i.dub").length > 0,
+          type: "",
+          genres: [],
+          releaseDate: card.find(".meta.icons i.date").text().trim() || "",
+          quality: card.find(".meta.icons i.quality").text().trim() || "",
+          sub: card.find(".meta.icons i.sub").length > 0 ? 1 : 0,
+          dub: card.find(".meta.icons i.dub").length > 0 ? 1 : 0,
           description: card.find(".synopsis").text().trim(),
         });
       });
@@ -274,12 +278,21 @@ export class Anikoto {
         const slug = this.parseSlug(card.attr("href"));
         if (!slug) return;
         const img = card.find(".poster img").first();
+        // .meta dots: [rating, score, type, year] — rating/score carry marker
+        // classes, the bare dots are type then year.
+        const plain = card
+          .find(".meta .dot")
+          .filter((_, d) => !$(d).hasClass("rating") && !$(d).hasClass("text-gray2"))
+          .map((_, d) => $(d).text().trim())
+          .get();
         results.push({
           id: slug,
           title: nameEl.text().trim() || img.attr("alt")?.trim() || "",
           url: `${this.baseUrl}/watch/${slug}`,
-          japaneseTitle: nameEl.attr("data-jp")?.trim() || null,
           image: img.attr("src") || img.attr("data-src") || null,
+          japaneseTitle: nameEl.attr("data-jp")?.trim() || null,
+          type: plain[0] ?? "",
+          year: plain[1] && plain[1] !== "?" ? plain[1] : "",
         });
       });
       return results;
@@ -293,7 +306,11 @@ export class Anikoto {
 
   static async schedule(date: string = new Date().toISOString().split("T")[0]!): Promise<any[]> {
     try {
-      const url = `${this.baseUrl}/ajax/schedule/date?date=${encodeURIComponent(date)}&tz=5.5`;
+      // Upstream takes the day as a unix timestamp (`time`), not a date string —
+      // a `date=` param is silently ignored and always yields today's airings.
+      const ts = Math.floor(Date.parse(`${date}T00:00:00Z`) / 1000);
+      if (!Number.isFinite(ts)) return [];
+      const url = `${this.baseUrl}/ajax/schedule/date?tz=0&time=${ts}`;
       const res = await fetch(url, { headers: this.ajaxHeaders() });
       const data = await res.json();
       const html = typeof data?.result === "string" ? data.result : "";
@@ -310,7 +327,11 @@ export class Anikoto {
           title: titleEl.text().trim(),
           japaneseTitle: titleEl.attr("data-jp")?.trim() || null,
           airingTime: card.find(".time").text().trim(),
-          airingEpisode: card.find(".ep span").text().trim().replace(/Episode\s*/i, ""),
+          airingEpisode: card
+            .find(".ep span")
+            .text()
+            .trim()
+            .replace(/Episode\s*/i, ""),
           url: `${this.baseUrl}/watch/${slug}`,
         });
       });
@@ -356,8 +377,7 @@ export class Anikoto {
           .map((s) => s.trim())
           .filter((s, i, arr) => s && arr.indexOf(s) === i);
       }
-      info.subOrDub =
-        info.hasSub && info.hasDub ? "both" : info.hasDub ? "dub" : "sub";
+      info.subOrDub = info.hasSub && info.hasDub ? "both" : info.hasDub ? "dub" : "sub";
 
       // bmeta rows: "Type: TV", "Genres: a, b", "Studios: ...", etc.
       $(".bmeta .meta > div").each((_, el) => {
@@ -506,22 +526,51 @@ export class Anikoto {
     }
   }
 
+  // Upstream groups servers into three blocks: data-type="sub" (soft sub),
+  // "hsub" (subs burned into the video) and "dub".
   private static async fetchServerList(
     serversToken: string,
-    type: "sub" | "dub",
     referer: string,
-  ): Promise<{ name: string; linkId: string }[]> {
+  ): Promise<{ type: string; name: string; linkId: string }[]> {
     const url = `${this.baseUrl}/ajax/server/list?servers=${encodeURIComponent(serversToken)}`;
     const res = await fetch(url, { headers: this.ajaxHeaders(referer) });
     const data = await res.json();
     const $ = cheerio.load(typeof data?.result === "string" ? data.result : "");
-    const servers: { name: string; linkId: string }[] = [];
-    $(`.servers .type[data-type="${type}"] li[data-link-id]`).each((_, el) => {
-      const li = $(el);
-      const linkId = li.attr("data-link-id");
-      if (linkId) servers.push({ name: li.text().trim() || "server", linkId });
+    const servers: { type: string; name: string; linkId: string }[] = [];
+    $(".servers .type[data-type]").each((_, block) => {
+      const type = ($(block).attr("data-type") ?? "").toLowerCase();
+      $(block)
+        .find("li[data-link-id]")
+        .each((_, el) => {
+          const li = $(el);
+          const linkId = li.attr("data-link-id");
+          if (linkId) servers.push({ type, name: li.text().trim() || "server", linkId });
+        });
     });
     return servers;
+  }
+
+  // Requested type → upstream block, in preference order. hardsub falls back
+  // to the softsub block because many titles have no hsub encode at all.
+  private static selectServers(
+    servers: { type: string; name: string; linkId: string }[],
+    requested: "softsub" | "dub" | "hardsub",
+  ): { type: string; name: string; linkId: string }[] {
+    const order =
+      requested === "dub" ? ["dub"] : requested === "hardsub" ? ["hsub", "sub"] : ["sub", "hsub"];
+    for (const t of order) {
+      const picked = servers.filter((s) => s.type === t);
+      if (picked.length > 0) return picked;
+    }
+    return [];
+  }
+
+  // Same labeling convention as the anizen provider so both providers'
+  // stream names are interchangeable for clients.
+  private static typeSuffix(t: string): string {
+    if (t === "dub") return " (Dub)";
+    if (t === "hsub") return " (HardSub)";
+    return " (SoftSub)";
   }
 
   private static async getSource(
@@ -529,17 +578,20 @@ export class Anikoto {
     referer: string,
   ): Promise<{ url: string; intro: [number, number]; outro: [number, number] } | null> {
     try {
-      const res = await fetch(
-        `${this.baseUrl}/ajax/server?get=${encodeURIComponent(linkId)}`,
-        { headers: this.ajaxHeaders(referer) },
-      );
+      const res = await fetch(`${this.baseUrl}/ajax/server?get=${encodeURIComponent(linkId)}`, {
+        headers: this.ajaxHeaders(referer),
+      });
       const data = await res.json();
       const url = data?.result?.url;
       if (!url) return null;
       const skip = data?.result?.skip_data ?? {};
       const intro: [number, number] = Array.isArray(skip.intro) ? skip.intro : [0, 0];
       const outro: [number, number] = Array.isArray(skip.outro) ? skip.outro : [0, 0];
-      return { url, intro: [this.toInt(intro[0]), this.toInt(intro[1])], outro: [this.toInt(outro[0]), this.toInt(outro[1])] };
+      return {
+        url,
+        intro: [this.toInt(intro[0]), this.toInt(intro[1])],
+        outro: [this.toInt(outro[0]), this.toInt(outro[1])],
+      };
     } catch (err) {
       Logger.error(`Anikoto getSource error: ${String(err)}`);
       return null;
@@ -611,22 +663,21 @@ export class Anikoto {
     try {
       const parsed = this.parseEpisodeId(episodeId);
       if (!parsed) return [];
-      const type: "sub" | "dub" = subOrDub === "dub" ? "dub" : "sub";
       const referer = `${this.baseUrl}/watch/${parsed.slug}/ep-${parsed.ep}`;
 
       const token = await this.getEpisodeServersToken(parsed.slug, parsed.aniId, parsed.ep);
       if (!token) return [];
 
-      const serverList = await this.fetchServerList(token, type, referer);
+      const serverList = this.selectServers(await this.fetchServerList(token, referer), subOrDub);
 
       const servers = await Promise.all(
         serverList.map(async (s): Promise<AnikotoServer | null> => {
           const src = await this.getSource(s.linkId, referer);
           if (!src) return null;
           return {
-            name: `anikoto ${s.name}${type === "dub" ? " (Dub)" : " (Sub)"}`.toLowerCase(),
+            name: `anikoto ${s.name}${this.typeSuffix(s.type)}`.toLowerCase(),
             url: src.url,
-            isDub: type === "dub",
+            isDub: s.type === "dub",
             intro: { start: src.intro[0], end: src.intro[1] },
             outro: { start: src.outro[0], end: src.outro[1] },
           };
@@ -642,21 +693,18 @@ export class Anikoto {
 
   // ─── Public: Streams ─────────────────────────────────────────────────────────────
 
-  static async streams(
-    episodeId: string,
-    type?: "softsub" | "dub" | "hardsub",
-  ): Promise<any> {
+  static async streams(episodeId: string, type?: "softsub" | "dub" | "hardsub"): Promise<any> {
     try {
       const parsed = this.parseEpisodeId(episodeId);
       if (!parsed) return { isDub: false, results: [] };
-      const t: "sub" | "dub" = type === "dub" ? "dub" : "sub";
+      const requested = type ?? "softsub";
+      const isDub = requested === "dub";
       const referer = `${this.baseUrl}/watch/${parsed.slug}/ep-${parsed.ep}`;
 
       const token = await this.getEpisodeServersToken(parsed.slug, parsed.aniId, parsed.ep);
-      if (!token) return { isDub: t === "dub", results: [] };
+      if (!token) return { isDub, results: [] };
 
-      const serverList = await this.fetchServerList(token, t, referer);
-      const suffix = t === "dub" ? " (Dub)" : " (Sub)";
+      const serverList = this.selectServers(await this.fetchServerList(token, referer), requested);
 
       let globalIntro: [number, number] | null = null;
       let globalOutro: [number, number] | null = null;
@@ -666,15 +714,19 @@ export class Anikoto {
         const src = await this.getSource(s.linkId, referer);
         if (!src) continue;
 
+        const name = `Anikoto ${s.name}${this.typeSuffix(s.type)}`;
         const isAlreadyHls = /\.m3u8(\?|$)/i.test(src.url);
-        if (!isAlreadyHls && /(megaplay\.buzz|vidwish\.live)/i.test(src.url)) {
+        if (!isAlreadyHls && /(megaplay\.buzz|vidwish\.live|vidtube\.site)/i.test(src.url)) {
           const resolved = await this.resolvePlayer(src.url);
           if (resolved) {
             results.push({
-              name: `Anikoto ${s.name}${suffix}`,
+              name,
               iframe: src.url,
               sources: [{ file: resolved.m3u8, type: "hls" }],
-              subtitles: resolved.subtitles,
+              subtitles: resolved.subtitles.map((tr) => ({
+                ...tr,
+                type: isDub ? "none" : "soft",
+              })),
               download: null,
               headers: { Referer: resolved.referer },
             });
@@ -682,7 +734,7 @@ export class Anikoto {
             if (!globalOutro && resolved.outro) globalOutro = resolved.outro;
           } else {
             results.push({
-              name: `Anikoto ${s.name}${suffix}`,
+              name,
               iframe: src.url,
               sources: [{ file: src.url, type: "iframe" }],
               subtitles: [],
@@ -691,7 +743,7 @@ export class Anikoto {
           }
         } else {
           results.push({
-            name: `Anikoto ${s.name}${suffix}`,
+            name,
             iframe: src.url,
             sources: [{ file: src.url, type: isAlreadyHls ? "hls" : "iframe" }],
             subtitles: [],
@@ -705,7 +757,7 @@ export class Anikoto {
       }
 
       return {
-        isDub: t === "dub",
+        isDub,
         results,
         ...(globalIntro ? { intro: globalIntro } : {}),
         ...(globalOutro ? { outro: globalOutro } : {}),

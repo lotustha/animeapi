@@ -3,6 +3,7 @@ import { Logger } from "../../../core/logger.js";
 import { anikoto as anikotoOrigin } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
 import { MegaUp } from "../animekai/scraper/megaup.js";
+import { proxifyFetch } from "../../../core/proxy.js";
 import type {
   AnikotoEpisode,
   AnikotoInfo,
@@ -754,8 +755,12 @@ export class Anikoto {
               name,
               iframe: src.url,
               sources: [{ file: resolved.m3u8, type: "hls" }],
+              // Subtitle CDN hard-checks Referer; players don't inject it for
+              // sidecar fetches, so serve VTTs through our proxy (which adds
+              // the Referer server-side) instead of the raw 403-gated url.
               subtitles: resolved.subtitles.map((tr) => ({
-                ...tr,
+                url: proxifyFetch(tr.url, { Referer: resolved.referer }),
+                lang: tr.lang,
                 type: isDub ? "none" : "soft",
               })),
               download: null,

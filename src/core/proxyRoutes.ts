@@ -330,10 +330,32 @@ export const proxyRoutes = new Elysia({ prefix: "/proxy" })
           return new Response("Payload too large", { status: 413 });
         }
 
+        // Subtitle sidecars are proxied through here (the video's Referer-gated
+        // CDN 403s direct sub fetches). The proxy path has no file extension and
+        // these CDNs often serve subs as octet-stream, so players that sniff the
+        // format by MIME/extension reject them. Force the correct subtitle MIME
+        // off the upstream URL so VTT/SRT/ASS tracks are recognised.
+        const path = (() => {
+          try {
+            return new URL(url).pathname.toLowerCase();
+          } catch {
+            return "";
+          }
+        })();
+        const subMime = path.endsWith(".vtt")
+          ? "text/vtt; charset=utf-8"
+          : path.endsWith(".srt")
+            ? "application/x-subrip; charset=utf-8"
+            : path.endsWith(".ass") || path.endsWith(".ssa")
+              ? "text/x-ssa; charset=utf-8"
+              : null;
+
         return new Response(res.body, {
           status: res.status,
           headers: {
-            "content-type": res.headers.get("content-type") || "application/octet-stream",
+            "content-type":
+              subMime || res.headers.get("content-type") || "application/octet-stream",
+            "access-control-allow-origin": "*",
           },
         });
       } catch (err: any) {

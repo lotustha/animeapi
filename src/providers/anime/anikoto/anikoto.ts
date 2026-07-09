@@ -63,6 +63,23 @@ export class Anikoto {
 
   // ─── Card / Pagination Scraper ───────────────────────────────────────────────
 
+  // Upstream badge text is inconsistently cased across cards ("Movie" on the
+  // poster badge vs "MOVIE" in the info meta) — normalize to one casing so
+  // clients can match on type.
+  private static normalizeShowType(raw: string): string | undefined {
+    const t = raw.trim();
+    if (!t) return undefined;
+    const canonical: Record<string, string> = {
+      TV: "TV",
+      MOVIE: "Movie",
+      OVA: "OVA",
+      ONA: "ONA",
+      SPECIAL: "Special",
+      MUSIC: "Music",
+    };
+    return canonical[t.toUpperCase()] ?? t;
+  }
+
   private static scrapeCard($: cheerio.CheerioAPI, el: any): AnikotoSearchItem | null {
     const card = $(el);
     const poster = card.find(".ani.poster, .poster").first();
@@ -84,10 +101,10 @@ export class Anikoto {
       url: `${this.baseUrl}/watch/${slug}`,
       image: img.attr("src") || img.attr("data-src") || null,
       japaneseTitle: nameEl.attr("data-jp")?.trim() || null,
-      type:
+      type: this.normalizeShowType(
         poster.find(".meta .right").first().text().trim() ||
-        card.find(".info .meta .m-item").eq(1).find("label").text().trim() ||
-        undefined,
+          card.find(".info .meta .m-item").eq(1).find("label").text().trim(),
+      ),
       rating: card.find(".m-item.rated span").first().text().trim() || null,
       sub,
       dub,
@@ -573,6 +590,16 @@ export class Anikoto {
     return " (SoftSub)";
   }
 
+  // The vidtube.site player (VidPlay-*) ignores the /sub|/hsub|/dub suffix in
+  // its embed URL: all three resolve to the same data-id and the same
+  // single-audio master.m3u8 with soft English subs (verified on multiple
+  // titles). So a vidtube stream is always softsub — drop it from dub results
+  // instead of surfacing Japanese audio labeled "(Dub)", and relabel it
+  // "(SoftSub)" when the upstream hsub block leaks it.
+  private static isTypeAgnosticPlayer(url: string): boolean {
+    return /vidtube\.site/i.test(url);
+  }
+
   private static async getSource(
     linkId: string,
     referer: string,
@@ -674,8 +701,10 @@ export class Anikoto {
         serverList.map(async (s): Promise<AnikotoServer | null> => {
           const src = await this.getSource(s.linkId, referer);
           if (!src) return null;
+          const typeAgnostic = this.isTypeAgnosticPlayer(src.url);
+          if (typeAgnostic && s.type === "dub") return null;
           return {
-            name: `anikoto ${s.name}${this.typeSuffix(s.type)}`.toLowerCase(),
+            name: `anikoto ${s.name}${typeAgnostic ? " (SoftSub)" : this.typeSuffix(s.type)}`.toLowerCase(),
             url: src.url,
             isDub: s.type === "dub",
             intro: { start: src.intro[0], end: src.intro[1] },
@@ -714,7 +743,9 @@ export class Anikoto {
         const src = await this.getSource(s.linkId, referer);
         if (!src) continue;
 
-        const name = `Anikoto ${s.name}${this.typeSuffix(s.type)}`;
+        const typeAgnostic = this.isTypeAgnosticPlayer(src.url);
+        if (typeAgnostic && s.type === "dub") continue;
+        const name = `Anikoto ${s.name}${typeAgnostic ? " (SoftSub)" : this.typeSuffix(s.type)}`;
         const isAlreadyHls = /\.m3u8(\?|$)/i.test(src.url);
         if (!isAlreadyHls && /(megaplay\.buzz|vidwish\.live|vidtube\.site)/i.test(src.url)) {
           const resolved = await this.resolvePlayer(src.url);

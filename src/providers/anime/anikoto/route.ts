@@ -240,7 +240,12 @@ export const anikotoRoutes = new Elysia({ prefix: "/anikoto" })
       return { message: "Anime not found" };
     }
 
-    Cache.set(key, JSON.stringify(res), 86400 * 3);
+    // Airing shows gain episodes, so cache them briefly (30 min) — otherwise the
+    // new-episode notifier's cache purge is the only thing keeping /info fresh,
+    // and a missed purge would pin a stale episode list for the full 3 days.
+    // Finished shows never change, so keep the long 3-day TTL.
+    const ttl = res.status === "Currently Airing" ? 1800 : 86400 * 3;
+    Cache.set(key, JSON.stringify(res), ttl);
     return res;
   })
 

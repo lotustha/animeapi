@@ -10,6 +10,7 @@ import { movieTvRoutes } from "./providers/movie-tv/route.js";
 import { musicRoutes } from "./providers/music/route.js";
 import { streamRoutes } from "./providers/stream/route.js";
 import { cronRoutes } from "./routes/cron.js";
+import { adminRoutes } from "./routes/admin.js";
 
 import { isNode } from "./core/runtime.js";
 import { env } from "./core/runtime.js";
@@ -90,6 +91,7 @@ export async function createApp() {
     .use(streamRoutes)
     .use(proxyRoutes)
     .use(cronRoutes)
+    .use(adminRoutes)
     .use(mappingRoutes);
 
   return app;

@@ -628,38 +628,6 @@ export class Anikoto {
 
   // ─── megaplay.buzz player → m3u8 resolver ───────────────────────────────────────
 
-  // megaplay.buzz and vidwish.live serve the same catalog under the same
-  // /stream/<...> paths (the page's data-id differs per host, but we scrape it
-  // fresh off whichever page we load). When one host is down — vidwish 502s
-  // for days at a time — the same path on the other host still resolves.
-  private static mirrorPlayerUrl(playerUrl: string): string | null {
-    if (/vidwish\.live/i.test(playerUrl))
-      return playerUrl.replace(/vidwish\.live/i, "megaplay.buzz");
-    if (/megaplay\.buzz/i.test(playerUrl))
-      return playerUrl.replace(/megaplay\.buzz/i, "vidwish.live");
-    return null;
-  }
-
-  private static async playerPageAlive(playerUrl: string): Promise<boolean> {
-    try {
-      const res = await fetch(playerUrl, {
-        headers: { "User-Agent": USER_AGENT, Referer: `${this.baseUrl}/` },
-      });
-      return res.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  /** For embeddable player pages, return a URL on a host that's actually up. */
-  private static async liveEmbedUrl(playerUrl: string): Promise<string> {
-    const mirror = this.mirrorPlayerUrl(playerUrl);
-    if (!mirror) return playerUrl;
-    if (await this.playerPageAlive(playerUrl)) return playerUrl;
-    if (await this.playerPageAlive(mirror)) return mirror;
-    return playerUrl;
-  }
-
   private static async resolvePlayer(playerUrl: string): Promise<{
     m3u8: string;
     referer: string;
@@ -738,7 +706,7 @@ export class Anikoto {
           if (typeAgnostic && s.type === "dub") return null;
           return {
             name: `anikoto ${s.name}${typeAgnostic ? " (SoftSub)" : this.typeSuffix(s.type)}`.toLowerCase(),
-            url: await this.liveEmbedUrl(src.url),
+            url: src.url,
             isDub: s.type === "dub",
             intro: { start: src.intro[0], end: src.intro[1] },
             outro: { start: src.outro[0], end: src.outro[1] },
@@ -781,21 +749,11 @@ export class Anikoto {
         const name = `Anikoto ${s.name}${typeAgnostic ? " (SoftSub)" : this.typeSuffix(s.type)}`;
         const isAlreadyHls = /\.m3u8(\?|$)/i.test(src.url);
         if (!isAlreadyHls && /(megaplay\.buzz|vidwish\.live|vidtube\.site)/i.test(src.url)) {
-          // Clients embed `iframe` directly, so it must point at the player
-          // host that actually answered — not a mirror that's currently down.
-          let playerUrl = src.url;
-          let resolved = await this.resolvePlayer(playerUrl);
-          if (!resolved) {
-            const mirror = this.mirrorPlayerUrl(playerUrl);
-            if (mirror) {
-              resolved = await this.resolvePlayer(mirror);
-              if (resolved) playerUrl = mirror;
-            }
-          }
+          const resolved = await this.resolvePlayer(src.url);
           if (resolved) {
             results.push({
               name,
-              iframe: playerUrl,
+              iframe: src.url,
               sources: [{ file: resolved.m3u8, type: "hls" }],
               // Subtitle CDN hard-checks Referer; players don't inject it for
               // sidecar fetches, so serve VTTs through our proxy (which adds
@@ -813,8 +771,8 @@ export class Anikoto {
           } else {
             results.push({
               name,
-              iframe: playerUrl,
-              sources: [{ file: playerUrl, type: "iframe" }],
+              iframe: src.url,
+              sources: [{ file: src.url, type: "iframe" }],
               subtitles: [],
               download: null,
             });

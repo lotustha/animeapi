@@ -4,6 +4,7 @@ import { anikoto as anikotoOrigin } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
 import { MegaUp } from "../animekai/scraper/megaup.js";
 import { proxifyFetch } from "../../../core/proxy.js";
+import { isBlocked, isBlockedSlug } from "./blocklist.js";
 import type {
   AnikotoEpisode,
   AnikotoInfo,
@@ -91,6 +92,9 @@ export class Anikoto {
     if (!slug) return null;
 
     const img = poster.find("img").first();
+    const cardTitle = nameEl.text().trim() || img.attr("alt")?.trim() || "";
+    if (isBlocked(slug, cardTitle, nameEl.attr("data-jp"))) return null;
+
     const sub = this.toInt(poster.find(".ep-status.sub span").text());
     const dub = this.toInt(poster.find(".ep-status.dub span").text());
     const total = this.toInt(poster.find(".ep-status.total span").text());
@@ -98,7 +102,7 @@ export class Anikoto {
     return {
       id: slug,
       aniId: poster.attr("data-tip") || card.find("[data-tip]").first().attr("data-tip") || null,
-      title: nameEl.text().trim() || img.attr("alt")?.trim() || "",
+      title: cardTitle,
       url: `${this.baseUrl}/watch/${slug}`,
       image: img.attr("src") || img.attr("data-src") || null,
       japaneseTitle: nameEl.attr("data-jp")?.trim() || null,
@@ -257,6 +261,7 @@ export class Anikoto {
         const href = card.find(".actions a.play, .actions a").first().attr("href") || "";
         const slug = this.parseSlug(href);
         if (!slug) return;
+        if (isBlocked(slug, titleEl.text(), titleEl.attr("data-jp"))) return;
         const bg = card.find(".image div[style]").attr("style") || "";
         results.push({
           id: slug,
@@ -296,6 +301,7 @@ export class Anikoto {
         const slug = this.parseSlug(card.attr("href"));
         if (!slug) return;
         const img = card.find(".poster img").first();
+        if (isBlocked(slug, nameEl.text(), img.attr("alt"), nameEl.attr("data-jp"))) return;
         // .meta dots: [rating, score, type, year] — rating/score carry marker
         // classes, the bare dots are type then year.
         const plain = card
@@ -339,6 +345,7 @@ export class Anikoto {
         const titleEl = card.find(".title.d-title, .title").first();
         const slug = this.parseSlug(card.attr("href"));
         if (!slug) return;
+        if (isBlocked(slug, titleEl.text(), titleEl.attr("data-jp"))) return;
         results.push({
           id: slug,
           aniId: card.find(".time").attr("data-tip") || null,
@@ -365,6 +372,7 @@ export class Anikoto {
   static async info(id: string): Promise<AnikotoInfo | null> {
     try {
       const slug = id.split("$")[0]!;
+      if (isBlockedSlug(slug)) return null;
       const res = await fetch(`${this.baseUrl}/watch/${slug}`, { headers: this.headers() });
       const $ = cheerio.load(await res.text());
 
@@ -374,6 +382,9 @@ export class Anikoto {
       // anikoto serves a 200 soft-404 page for unknown slugs; treat a page with
       // neither an aniId nor a title as "not found".
       if (!aniId && !titleEl.text().trim()) return null;
+
+      // DMCA takedown by title, for slugs the slug-part match doesn't cover.
+      if (isBlocked(slug, titleEl.text(), titleEl.attr("data-jp"))) return null;
 
       const info: AnikotoInfo = {
         id: slug,
@@ -449,6 +460,7 @@ export class Anikoto {
           if (!recSlug || recSlug === slug) return;
           const nameEl = a.find(".name.d-title, .name").first();
           const img = a.find(".poster img").first();
+          if (isBlocked(recSlug, nameEl.text(), img.attr("alt"), nameEl.attr("data-jp"))) return;
           info.recommendations!.push({
             id: recSlug,
             aniId: a.find(".poster").attr("data-tip") || null,
@@ -519,6 +531,7 @@ export class Anikoto {
     const ep = this.toInt(episodeId.match(/\$ep=([^$]+)/)?.[1]);
     const aniId = episodeId.match(/\$id=([^$]+)/)?.[1] || "";
     if (!slug || !aniId || !ep) return null;
+    if (isBlockedSlug(slug)) return null;
     return { slug, ep, aniId };
   }
 

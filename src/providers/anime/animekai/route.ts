@@ -255,4 +255,26 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
     return {
       servers: await AnimeKai.fetchEpisodeServers(episodeId, type ?? "hardsub"),
     };
+  })
+
+  // ─── Downloads ─────────────────────────────────────────────────────────────
+  .get("/download/:episodeId", async ({ params: { episodeId }, set }) => {
+    if (!episodeId) {
+      set.status = 400;
+      return { message: "episodeId is required" };
+    }
+
+    const key = `animekai:v1:download:${episodeId}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const res = await AnimeKai.downloads(episodeId);
+    if (!res) {
+      set.status = 404;
+      return { message: "No downloads found for this episode" };
+    }
+
+    // Host links are stable for a released episode; a day is plenty.
+    if (res.rows.length > 0) Cache.set(key, JSON.stringify(res), 86400);
+    return res;
   });

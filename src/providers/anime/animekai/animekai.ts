@@ -698,6 +698,102 @@ export class AnimeKai {
     }
   }
 
+  // ─── Downloads ───────────────────────────────────────────────────────────────
+
+  // /download/<slug>/ep-<n> lists direct download links per host, grouped by
+  // audio type, plus the episode's subtitle files in every available language
+  // (the watch page only ever exposes one). Markup:
+  //   <article class="ak-download-row" data-type="sub">
+  //     <div class="ak-download-row-meta"><span class="ak-download-quality">Original</span>
+  //       <span>SUB</span><span>MP4</span><span>178.16 MB</span></div>
+  //     <div class="ak-download-servers">
+  //       <div class="ak-download-server"><div><strong>StreamHG</strong><small>178.16 MB</small></div>
+  //         <a class="ak-download-button" href="…/d/<id>">
+  // Subtitles reuse .ak-download-server but sit outside any row, which is how
+  // the two are told apart below.
+  static async downloads(episodeId: string): Promise<{
+    id: string;
+    episode: number;
+    url: string;
+    rows: {
+      type: string;
+      quality: string;
+      format: string;
+      size: string;
+      servers: { name: string; size: string; url: string }[];
+    }[];
+    subtitles: { lang: string; format: string; url: string }[];
+  } | null> {
+    try {
+      const animeSlug = episodeId.split("$")[0]!;
+      const epNum = /\$ep=([^$]+)/.exec(episodeId)?.[1] ?? "1";
+      const pageUrl = `${this.baseUrl}/download/${animeSlug}/ep-${epNum}`;
+
+      const res = await fetch(pageUrl, {
+        headers: { ...this.headers(), Referer: `${this.baseUrl}/watch/${animeSlug}/ep-${epNum}` },
+      });
+      if (!res.ok) return null;
+      const $ = cheerio.load(await res.text());
+
+      const parseServer = (el: any) => {
+        const s$ = $(el);
+        const url = s$.find("a.ak-download-button, a[href]").attr("href") ?? "";
+        return {
+          name: s$.find("strong").first().text().trim() || "unknown",
+          size: s$.find("small").first().text().trim(),
+          url,
+        };
+      };
+
+      const rows = $(".ak-download-row")
+        .toArray()
+        .map((row) => {
+          const r$ = $(row);
+          const meta = r$
+            .find(".ak-download-row-meta span")
+            .toArray()
+            .map((s) => $(s).text().trim());
+          const quality = r$.find(".ak-download-quality").text().trim() || meta[0] || "";
+          // meta reads [quality, SUB/DUB, container, size]; take the last two
+          // positionally rather than by index so an extra badge doesn't shift it.
+          const size = meta.length > 0 ? meta[meta.length - 1]! : "";
+          const format = meta.length > 1 ? meta[meta.length - 2]! : "";
+          return {
+            type: (r$.attr("data-type") ?? "").toLowerCase(),
+            quality,
+            format,
+            size,
+            servers: r$
+              .find(".ak-download-server")
+              .toArray()
+              .map(parseServer)
+              .filter((s) => s.url),
+          };
+        })
+        .filter((r) => r.servers.length > 0);
+
+      const subtitles = $(".ak-download-server")
+        .toArray()
+        .filter((el) => $(el).closest(".ak-download-row").length === 0)
+        .map((el) => {
+          const s = parseServer(el);
+          return { lang: s.name, format: s.size, url: s.url };
+        })
+        .filter((s) => s.url);
+
+      return {
+        id: animeSlug,
+        episode: parseInt(epNum, 10) || 1,
+        url: pageUrl,
+        rows,
+        subtitles,
+      };
+    } catch (err) {
+      Logger.error(`AnimeKai downloads error: ${String(err)}`);
+      return null;
+    }
+  }
+
   // ─── Resolve / Mapping Helpers ───────────────────────────────────────────────
 
   static async resolveByExternalId(_params: {

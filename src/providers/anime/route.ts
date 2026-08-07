@@ -52,6 +52,23 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/animekai/episodes/:id           → Episode list",
           "GET /anime/animekai/episode/:id/:session   → Stream results",
         ],
+        animekai: [
+          "GET /anime/animekai/search/:query          → Paginated search",
+          "GET /anime/animekai/spotlight              → Spotlight anime",
+          "GET /anime/animekai/movies|tv|ova|ona|specials → Browse by type",
+          "GET /anime/animekai/genres                 → List all genres",
+          "GET /anime/animekai/genre/:genre           → Browse by genre",
+          "GET /anime/animekai/info/:id               → Full details + episodes",
+          "GET /anime/animekai/watch/:episodeId       → Stream sources (query: type=sub|dub|hardsub)",
+          "GET /anime/animekai/servers/:episodeId     → Episode servers (query: type)",
+          "GET /anime/animekai/download/:episodeId    → Direct download links + all subtitle languages",
+          "    ↳ HD-1 (vivibebe) resolves to real HLS with a qualities[] ladder; the other",
+          "      hosts stay iframe-only. Embeds that report their video as gone are dropped.",
+          "    ↳ /download returns rows grouped by audio type (sub/dub/hsub), each with per-host",
+          "      links and file sizes, plus subtitles in every language the episode has —",
+          "      /watch only ever exposes one.",
+        ],
+
         anigo: [
           "GET /anime/anigo/search/:query          → Paginated search",
           "GET /anime/anigo/spotlight              → Spotlight anime",

@@ -93,6 +93,14 @@ export interface AnizenInfo {
   episodes: AnizenEpisode[];
 }
 
+// Audio-track types the upstream /api/stream endpoint accepts. "hindi" and
+// "hsub" (hardsubbed) were added when anizen started carrying Hindi dubs.
+export type AnizenAudioType = "sub" | "dub" | "hindi" | "hsub";
+
+// Route-level ?type= tokens. "softsub"/"hardsub" are legacy aliases that both
+// map to upstream "sub" (historical behavior, kept for existing clients).
+export type AnizenTypeParam = "sub" | "softsub" | "dub" | "hardsub" | "hindi" | "hsub";
+
 export interface AnizenServer {
   name: string;
   url: string;
@@ -101,10 +109,24 @@ export interface AnizenServer {
   outro: { start: number; end: number };
 }
 
+// One rendition from an HLS master playlist. `file` points at that rendition's
+// media playlist and is directly playable/downloadable on its own — clients can
+// hand it to a native HLS downloader (e.g. ExoPlayer's DownloadManager).
+// Only resolutions the upstream actually publishes appear here; the list is
+// empty when the stream ships a single quality.
+export interface AnizenQuality {
+  label: string;
+  width?: number;
+  height?: number;
+  bandwidth?: number;
+  file: string;
+}
+
 export interface AnizenStreamSource {
   name: string;
   iframe: string;
   sources: { file: string; type: string }[];
+  qualities?: AnizenQuality[];
   subtitles: { url?: string; lang?: string; type: string }[];
   download: string | null;
   // HTTP headers the client MUST send when fetching `sources[].file` and its

@@ -1,6 +1,7 @@
 import { Elysia } from "elysia";
 import { Cache } from "../../../core/cache.js";
 import { Anizen } from "./anizen.js";
+import type { AnizenTypeParam } from "./types.js";
 
 export const anizenRoutes = new Elysia({ prefix: "/anizen" })
 
@@ -247,7 +248,8 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
       return { message: "episodeId is required" };
     }
 
-    const type = qs?.type as "softsub" | "dub" | "hardsub" | undefined;
+    // type: sub|softsub (default), dub, hindi, hsub, hardsub (legacy alias of sub)
+    const type = qs?.type as AnizenTypeParam | undefined;
     return await Anizen.streams(episodeId, type);
   })
 
@@ -258,7 +260,7 @@ export const anizenRoutes = new Elysia({ prefix: "/anizen" })
       return { message: "episodeId is required" };
     }
 
-    const type = qs?.type as "softsub" | "dub" | "hardsub" | undefined;
+    const type = qs?.type as AnizenTypeParam | undefined;
     return {
       servers: await Anizen.fetchEpisodeServers(episodeId, type ?? "hardsub"),
     };

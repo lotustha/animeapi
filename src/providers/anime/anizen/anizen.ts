@@ -1,9 +1,15 @@
 import * as cheerio from "cheerio";
+import { SERVER_ORIGIN } from "../../../core/config.js";
 import { Logger } from "../../../core/logger.js";
+import { proxifyFetch, proxifySource } from "../../../core/proxy.js";
 import { anizen as anizenOrigin, anizen_api as anizenApi } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
+import { fetchVariants } from "./scraper/hls.js";
+import { getVidmolySource, isVidmolyUrl } from "./scraper/vidmoly.js";
 import type {
+  AnizenAudioType,
   AnizenEpisode,
+  AnizenQuality,
   AnizenInfo,
   AnizenPagedResult,
   AnizenRelatedItem,
@@ -14,6 +20,7 @@ import type {
   AnizenStreamResponse,
   AnizenStreamSource,
   AnizenSuggestionItem,
+  AnizenTypeParam,
 } from "./types.js";
 
 // Wraps the upstream JSON API at aniapi.anizen.tr. Endpoint set + response
@@ -167,9 +174,7 @@ export class Anizen {
   static async search(query: string, page = 1): Promise<AnizenPagedResult<AnizenSearchItem>> {
     if (!query) return { currentPage: 0, hasNextPage: false, totalPages: 0, results: [] };
     const p = page > 0 ? page : 1;
-    const html = await this.getHtml(
-      `/search?keyword=${encodeURIComponent(query)}&page=${p}`,
-    );
+    const html = await this.getHtml(`/search?keyword=${encodeURIComponent(query)}&page=${p}`);
     if (!html) return { currentPage: 0, hasNextPage: false, totalPages: 0, results: [] };
     return this.parseSearchHtml(html, p);
   }
@@ -302,9 +307,7 @@ export class Anizen {
         const raw = await this.getJson(`/api/schedule?date=${date}`);
         const arr = Array.isArray(raw?.results) ? raw.results : [];
         // Each day's airings: newest time first.
-        arr.sort((a: any, b: any) =>
-          String(b?.time ?? "").localeCompare(String(a?.time ?? "")),
-        );
+        arr.sort((a: any, b: any) => String(b?.time ?? "").localeCompare(String(a?.time ?? "")));
         return arr;
       }),
     );
@@ -425,18 +428,20 @@ export class Anizen {
     const seasonsRaw = Array.isArray(raw?.results?.seasons) ? raw.results.seasons : [];
     const relations: AnizenRelatedItem[] = seasonsRaw
       .filter((s: any) => s?.id && s.id !== data.id)
-      .map((s: any): AnizenRelatedItem => ({
-        id: s.id,
-        title: s.title ?? s.id,
-        url: `${this.site}/details/${s.id}`,
-        image: s.season_poster ?? undefined,
-        japaneseTitle: null,
-        type: "",
-        sub: 0,
-        dub: 0,
-        episodes: 0,
-        relationType: s.season ?? "",
-      }));
+      .map(
+        (s: any): AnizenRelatedItem => ({
+          id: s.id,
+          title: s.title ?? s.id,
+          url: `${this.site}/details/${s.id}`,
+          image: s.season_poster ?? undefined,
+          japaneseTitle: null,
+          type: "",
+          sub: 0,
+          dub: 0,
+          episodes: 0,
+          relationType: s.season ?? "",
+        }),
+      );
 
     return {
       id: data.id,
@@ -475,59 +480,105 @@ export class Anizen {
     return { slug, ep };
   }
 
-  private static normalizeType(type?: string): "sub" | "dub" {
-    return type === "dub" ? "dub" : "sub";
+  // Upstream audio types. "hindi" (Abyss/Default/Mirror/VMoly) and "hsub"
+  // (hardsubbed VidPlay) were added when anizen started carrying Hindi dubs.
+  // Route-level "softsub"/"hardsub" keep their historical meaning (both map
+  // to upstream "sub") so existing clients don't change behavior; the new
+  // audio tracks are opt-in via type=hindi / type=hsub.
+  private static normalizeType(type?: string): AnizenAudioType {
+    if (type === "dub") return "dub";
+    if (type === "hindi") return "hindi";
+    if (type === "hsub") return "hsub";
+    return "sub";
   }
 
-  private static async fetchStream(slug: string, ep: string, type: "sub" | "dub"): Promise<any | null> {
+  private static async fetchStream(
+    slug: string,
+    ep: string,
+    type: AnizenAudioType,
+  ): Promise<any | null> {
     // slug?ep=N must be passed unencoded for the upstream router to parse it.
     return this.getJson(`/api/stream?id=${slug}?ep=${ep}&type=${type}`);
   }
 
   // ─── Player resolver ───────────────────────────────────────────────────────
-  // Upstream's streamingLink.file is a /player/<token> page on aniapi.anizen.tr
-  // that wraps a megacloud-style iframe. Resolve it down to the actual m3u8:
-  //   1. GET /player/<token>/resolve with X-Requested-With: ZenPlayer
-  //        → { url: "https://megaplay.buzz/stream/s-2/<realId>/<sub|dub>" }
-  //   2. GET that page, scrape data-id="<fileId>" off #megaplay-player
+  // Upstream's streamingLink.file is a /player/<token> page on api.anizen.tr
+  // that wraps an inner embed. Resolve it down to the actual m3u8:
+  //   1. GET /player/<token>/resolve with X-Requested-With: ZenPlayer AND
+  //      Chrome-shaped sec-ch-ua + Sec-Fetch-* headers — upstream now 403s
+  //      ("unsupported_browser") without them.
+  //        → { url: "<inner embed>", servers: [{ name, url }, ...] }
+  //      `servers` is the full mirror map for the requested audio type; its
+  //      names match /api/stream's serverName values, so one resolve call
+  //      covers the whole server list.
+  //   2. GET the inner page, scrape data-id="<fileId>" (megaplay-family hosts:
+  //      megaplay.buzz / vidwish.live / vidtube.site)
   //   3. GET <inner host>/stream/getSources?id=<fileId>
   //        → { sources:{file:<m3u8>}, tracks:[...], intro, outro }
-  // The inner player is mirrored across megaplay.buzz and vidwish.live (same
-  // /stream/s-2/<id>/<type> paths), and /resolve sometimes hands out the dead
-  // mirror (vidwish serves an error page for files megaplay has) — so try the
-  // given host first, then its mirror. The CDN that serves the m3u8
-  // hard-checks the Referer of whichever mirror produced it (every other
-  // referer gets 403), so clients MUST send the returned referer.
+  // Hindi servers resolve to external hosts (ryzex.top, gdmirrorbot.nl,
+  // vidmoly.net) with no data-id chain — those are surfaced as iframes of the
+  // *inner* embed, which browsers can load directly (the api.anizen.tr wrapper
+  // page is the one that shows "Video not loading? Set your DNS…").
+  // The CDN that serves the m3u8 hard-checks the Referer of whichever mirror
+  // produced it (every other referer gets 403), so clients MUST send the
+  // returned referer.
 
-  private static readonly PLAYER_MIRROR_HOSTS = ["megaplay.buzz", "vidwish.live"];
+  private static readonly PLAYER_MIRROR_HOSTS = ["megaplay.buzz", "vidwish.live", "vidtube.site"];
 
   private static isPlayerUrl(url: string): boolean {
-    return /^https?:\/\/[^/]*(?:aniapi|cdn)\.anizen\.[a-z]+\/player\//i.test(url);
+    return /^https?:\/\/[^/]*(?:aniapi|cdn|api)\.anizen\.[a-z]+\/player\//i.test(url);
+  }
+
+  // Browser-shaped headers for /player/<token>/resolve. The gate checks for
+  // Chromium client hints + Sec-Fetch metadata, not just the User-Agent.
+  private static resolveHeaders(referer: string): Record<string, string> {
+    return {
+      "User-Agent": USER_AGENT,
+      Accept: "application/json, text/plain, */*",
+      "Accept-Language": "en-US,en;q=0.9",
+      Referer: referer,
+      "X-Requested-With": "ZenPlayer",
+      "sec-ch-ua": '"Chromium";v="131", "Google Chrome";v="131", "Not A(Brand";v="24"',
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": '"Windows"',
+      "Sec-Fetch-Site": "same-origin",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Dest": "empty",
+    };
   }
 
   private static async resolvePlayer(playerUrl: string): Promise<{
-    m3u8: string;
-    referer: string;
+    m3u8: string | null;
+    referer: string | null;
+    innerUrl: string;
+    mirrors: { name: string; url: string }[];
     subtitles: { file: string; label?: string; kind?: string; default?: boolean }[];
     intro?: { start: number; end: number };
     outro?: { start: number; end: number };
   } | null> {
     try {
-      // 1. /resolve → inner iframe URL
+      // 1. /resolve → inner iframe URL + mirror list
       const resolveRes = await fetch(`${playerUrl}/resolve`, {
-        headers: {
-          "User-Agent": USER_AGENT,
-          Referer: playerUrl,
-          "X-Requested-With": "ZenPlayer",
-        },
+        headers: this.resolveHeaders(playerUrl),
       });
       if (!resolveRes.ok) return null;
-      const resolveJson = (await resolveRes.json()) as { url?: string };
+      const resolveJson = (await resolveRes.json()) as {
+        url?: string;
+        servers?: { name?: string; url?: string }[];
+      };
       const innerUrl = resolveJson?.url;
       if (!innerUrl) return null;
 
-      // 2+3 on the given host, then on its mirror.
+      const mirrors = (Array.isArray(resolveJson.servers) ? resolveJson.servers : []).filter(
+        (s): s is { name: string; url: string } => !!s?.name && !!s?.url,
+      );
+
+      // 2+3 on the given host, its upstream-listed mirrors, then legacy
+      // host-swaps (resolve sometimes hands out a dead mirror).
       const candidates = [innerUrl];
+      for (const m of mirrors) {
+        if (!candidates.includes(m.url)) candidates.push(m.url);
+      }
       try {
         const u = new URL(innerUrl);
         if (this.PLAYER_MIRROR_HOSTS.includes(u.host)) {
@@ -535,7 +586,7 @@ export class Anizen {
             if (host === u.host) continue;
             const alt = new URL(innerUrl);
             alt.host = host;
-            candidates.push(alt.toString());
+            if (!candidates.includes(alt.toString())) candidates.push(alt.toString());
           }
         }
       } catch {
@@ -544,9 +595,11 @@ export class Anizen {
 
       for (const candidate of candidates) {
         const resolved = await this.resolveInnerPlayer(candidate);
-        if (resolved) return resolved;
+        if (resolved) return { ...resolved, innerUrl, mirrors };
       }
-      return null;
+      // No candidate yielded an m3u8 (external hosts like ryzex/vidmoly).
+      // Still return the inner embed + mirrors so callers can iframe them.
+      return { m3u8: null, referer: null, innerUrl, mirrors, subtitles: [] };
     } catch (err) {
       Logger.error(`Anizen resolvePlayer error for ${playerUrl}: ${String(err)}`);
       return null;
@@ -612,30 +665,38 @@ export class Anizen {
     }
   }
 
-  // Upstream's `servers` array mixes every audio variant (hsub/ssub/dub) in
-  // one list no matter which `type` was requested — filter before labeling,
-  // or a sub request surfaces dub embeds tagged "(HardSub)".
-  private static serverMatchesType(s: any, t: "sub" | "dub"): boolean {
+  // Upstream historically mixed every audio variant (hsub/ssub/dub) in one
+  // `servers` list no matter which `type` was requested; newer responses come
+  // pre-filtered but keep the filter as a safety net — a sub request must not
+  // surface dub/hindi embeds under a sub label.
+  private static serverMatchesType(s: any, t: AnizenAudioType): boolean {
     const st = String(s?.type ?? "").toLowerCase();
     if (!st) return true;
-    return t === "dub" ? st === "dub" : st !== "dub";
+    if (t === "dub") return st === "dub";
+    if (t === "hindi") return st === "hindi";
+    if (t === "hsub") return st === "hsub";
+    return st !== "dub" && st !== "hindi";
   }
 
   // Label by the stream's *actual* upstream type: "sub"/"ssub" carry VTT
-  // tracks (softsub), "hsub" has subs burned into the video. Labeling
-  // everything "(HardSub)" made softsub streams look like they lost their
-  // subtitles and hardsub ones look like subs were missing entirely.
-  private static typeSuffix(st: unknown, fallback: "sub" | "dub"): string {
+  // tracks (softsub), "hsub" has subs burned into the video, "hindi" is the
+  // Hindi audio track. Labeling everything "(HardSub)" made softsub streams
+  // look like they lost their subtitles and hardsub ones look like subs were
+  // missing entirely.
+  private static typeSuffix(st: unknown, fallback: AnizenAudioType): string {
     const v = String(st ?? "").toLowerCase();
     if (v === "dub") return " (Dub)";
+    if (v === "hindi") return " (Hindi)";
     if (v === "hsub") return " (HardSub)";
     if (v === "sub" || v === "ssub") return " (SoftSub)";
-    return fallback === "dub" ? " (Dub)" : " (HardSub)";
+    if (fallback === "dub") return " (Dub)";
+    if (fallback === "hindi") return " (Hindi)";
+    return " (HardSub)";
   }
 
   static async fetchEpisodeServers(
     episodeId: string,
-    subOrDub: "softsub" | "dub" | "hardsub" = "hardsub",
+    subOrDub: AnizenTypeParam = "hardsub",
   ): Promise<AnizenServer[]> {
     const parsed = this.parseEpisodeId(episodeId);
     if (!parsed) return [];
@@ -647,13 +708,25 @@ export class Anizen {
     const link = raw?.results?.streamingLink;
     const intro = Array.isArray(link?.intro) ? link.intro : [0, 0];
     const outro = Array.isArray(link?.outro) ? link.outro : [0, 0];
+
+    // Hand out the *inner* embed rather than the api.anizen.tr/player/<token>
+    // wrapper — the wrapper is the page that renders "Video not loading? Set
+    // your DNS to 1.1.1.1". One /resolve call returns the whole name→embed
+    // mirror map for this audio type, the same way streams() does it.
+    const mirrorByName = new Map<string, string>();
+    const seed = link?.link?.file ?? servers.find((s: any) => s?.embed)?.embed;
+    if (typeof seed === "string" && this.isPlayerUrl(seed)) {
+      const resolved = await this.resolvePlayer(seed);
+      for (const m of resolved?.mirrors ?? []) mirrorByName.set(m.name, m.url);
+    }
+
     return servers
       .map((s: any): AnizenServer | null => {
         if (!s?.embed) return null;
         const baseName = s.serverName ?? s.server_name ?? "unknown";
         return {
           name: `anizen ${baseName}${this.typeSuffix(s.type, type)}`.toLowerCase(),
-          url: s.embed,
+          url: mirrorByName.get(baseName) ?? s.embed,
           isDub: type === "dub",
           intro: { start: this.toInt(intro[0]), end: this.toInt(intro[1]) },
           outro: { start: this.toInt(outro[0]), end: this.toInt(outro[1]) },
@@ -662,10 +735,63 @@ export class Anizen {
       .filter((s: AnizenServer | null): s is AnizenServer => s !== null);
   }
 
-  static async streams(
-    episodeId: string,
-    type?: "softsub" | "dub" | "hardsub",
-  ): Promise<AnizenStreamResponse> {
+  // Reads the variant ladder off a master playlist so clients can offer a
+  // quality picker or download a specific rendition. Costs one extra fetch per
+  // HLS source, so it's only called on the single source we actually resolved.
+  //
+  // `proxify` mirrors whatever was done to the parent source: vidmoly's URLs
+  // are ASN-bound, so its per-rendition playlists must go back through our own
+  // proxy too — handing a client a raw variant URL would 403 exactly the way
+  // the master would. The megaplay/vidtube ladders are plain signed URLs the
+  // client can fetch itself given the right Referer.
+  private static async qualitiesFor(
+    rawMasterUrl: string,
+    headers: Record<string, string>,
+    proxify: boolean,
+  ): Promise<AnizenQuality[]> {
+    const variants = await fetchVariants(rawMasterUrl, headers);
+    if (!proxify) return variants;
+    return variants.map((v) => ({ ...v, file: proxifySource(v.file, headers) }));
+  }
+
+  // Vidmoly's master.m3u8 is signed AND bound to the network that resolved it
+  // (its `asn=` param encodes the requester's ASN) — a URL minted here 403s
+  // when the client plays it from a different network. Verified: a URL resolved
+  // on one host returns 403 Forbidden when fetched from another. So unlike the
+  // megaplay path (where the client just needs the right Referer), the Hindi
+  // stream MUST go back out through our own m3u8 proxy, so the same server that
+  // resolved the URL is the one fetching the playlist and segments. Subtitles
+  // ride /proxy/fetch for the same reason.
+  private static async buildVidmolySource(
+    serverName: string,
+    upstreamType: unknown,
+    t: AnizenAudioType,
+    iframeUrl: string,
+    vm: { m3u8: string; referer: string; subtitles: { file: string; label?: string }[] },
+  ): Promise<AnizenStreamSource> {
+    const headers = { Referer: vm.referer, "User-Agent": USER_AGENT };
+    // Without SERVER_ORIGIN (tests) there's no proxy to route through; fall
+    // back to the raw URL rather than emitting an "undefined/proxy/…" link.
+    const proxied = Boolean(SERVER_ORIGIN);
+    const file = proxied ? proxifySource(vm.m3u8, headers) : vm.m3u8;
+    const qualities = await this.qualitiesFor(vm.m3u8, headers, proxied);
+    return {
+      name: `Anizen ${serverName}${this.typeSuffix(upstreamType, t)}`,
+      iframe: iframeUrl,
+      sources: [{ file, type: "hls" }],
+      ...(qualities.length > 0 ? { qualities } : {}),
+      subtitles: vm.subtitles.map((tr) => ({
+        url: proxied ? proxifyFetch(tr.file, headers) : tr.file,
+        lang: tr.label,
+        type: "soft",
+      })),
+      download: null,
+      // Already proxied — the client needs no special headers of its own.
+      ...(proxied ? {} : { headers }),
+    };
+  }
+
+  static async streams(episodeId: string, type?: AnizenTypeParam): Promise<AnizenStreamResponse> {
     const parsed = this.parseEpisodeId(episodeId);
     if (!parsed) return { isDub: false, results: [] };
     const t = this.normalizeType(type);
@@ -681,8 +807,26 @@ export class Anizen {
     let resolvedIntro: [number, number] | null = null;
     let resolvedOutro: [number, number] | null = null;
     let haveHls = false;
+    // /resolve's `servers` maps serverName → inner embed URL for the whole
+    // audio type, so one resolve call covers every server below. When the
+    // primary resolve already walked all mirrors without finding an m3u8
+    // (hindi's external hosts), don't burn another resolve per server.
+    const mirrorByName = new Map<string, string>();
+    let primaryResolveExhausted = false;
 
-    if (link?.link?.file) {
+    // Upstream falls back to a sub stream instead of 404ing when a show has no
+    // track for the requested type (e.g. type=hindi on a show without a Hindi
+    // dub returns Japanese audio). The `servers` array is already type-filtered
+    // above, but streamingLink is not — check it too, or a Hindi request
+    // silently plays the wrong audio.
+    const primaryMatchesType = this.serverMatchesType(link, t);
+    if (link?.link?.file && !primaryMatchesType) {
+      Logger.warn(
+        `Anizen: upstream returned type "${link.type}" for a "${t}" request on ${parsed.slug} ep${parsed.ep} — dropping mismatched primary stream`,
+      );
+    }
+
+    if (link?.link?.file && primaryMatchesType) {
       const name = `Anizen ${link.server ?? "primary"}${this.typeSuffix(link.type, t)}`;
       seen.add(link.server ?? "");
       const upstreamTracks = Array.isArray(link.tracks) ? link.tracks : [];
@@ -703,25 +847,65 @@ export class Anizen {
       if (!isAlreadyHls && this.isPlayerUrl(file)) {
         const resolved = await this.resolvePlayer(file);
         if (resolved) {
+          for (const m of resolved.mirrors) mirrorByName.set(m.name, m.url);
+        }
+        if (resolved?.m3u8) {
           const resolvedSubs = resolved.subtitles.map((tr) => ({
             url: tr.file,
             lang: tr.label ?? tr.kind ?? undefined,
             type: t === "dub" ? "none" : "soft",
           }));
           const subtitles = resolvedSubs.length > 0 ? resolvedSubs : upstreamSubs;
+          const primaryHeaders = { Referer: resolved.referer! };
+          // megaplay/vidtube ladders are plain signed URLs — no proxying, the
+          // client fetches them directly with the same Referer.
+          const qualities = await this.qualitiesFor(resolved.m3u8, primaryHeaders, false);
           results.push({
             name,
             iframe: file,
             sources: [{ file: resolved.m3u8, type: "hls" }],
+            ...(qualities.length > 0 ? { qualities } : {}),
             subtitles,
             download: null,
-            headers: { Referer: resolved.referer },
+            headers: primaryHeaders,
           });
           if (resolved.intro) resolvedIntro = [resolved.intro.start, resolved.intro.end];
           if (resolved.outro) resolvedOutro = [resolved.outro.start, resolved.outro.end];
           haveHls = true;
+        } else if (resolved) {
+          primaryResolveExhausted = true;
+          // Upstream currently makes Abyss the Hindi primary and VMoly a
+          // secondary, so VMoly is normally handled in the servers loop below.
+          // If that ordering ever flips, `seen` would skip it there and Hindi
+          // would silently drop back to iframes — so extract here too.
+          const vm = isVidmolyUrl(resolved.innerUrl)
+            ? await getVidmolySource(resolved.innerUrl)
+            : null;
+          if (vm) {
+            results.push(
+              await this.buildVidmolySource(
+                link.server ?? "VMoly",
+                link.type,
+                t,
+                resolved.innerUrl,
+                vm,
+              ),
+            );
+            haveHls = true;
+          } else {
+            // Resolve worked but no mirror yields an m3u8 (hindi's external
+            // hosts) — surface the *inner* embed, which browsers can load,
+            // instead of the api.anizen.tr wrapper page.
+            results.push({
+              name,
+              iframe: resolved.innerUrl,
+              sources: [{ file: resolved.innerUrl, type: "iframe" }],
+              subtitles: upstreamSubs,
+              download: null,
+            });
+          }
         } else {
-          // Resolver failed (network/upstream change); surface the iframe so
+          // Resolver failed (network/upstream change); surface the wrapper so
           // the client at least has something to render.
           results.push({
             name,
@@ -749,23 +933,49 @@ export class Anizen {
       if (seen.has(sName)) continue;
       seen.add(sName);
 
+      // Prefer the mirror map's inner embed (directly loadable) over the
+      // api.anizen.tr wrapper page.
+      const iframeUrl = mirrorByName.get(sName) ?? s.embed;
+
+      // Vidmoly (the "VMoly" Hindi mirror) inlines a real HLS source. This is
+      // deliberately NOT gated on primaryResolveExhausted: that flag only means
+      // the *anizen* player chain yielded no m3u8 for this audio type, which
+      // says nothing about a third-party host. Hindi's primary (Abyss) always
+      // sets it, so gating here would leave the one extractable Hindi server
+      // stuck on an iframe.
+      if (!haveHls && isVidmolyUrl(iframeUrl)) {
+        const vm = await getVidmolySource(iframeUrl);
+        if (vm) {
+          results.unshift(await this.buildVidmolySource(sName, s.type, t, iframeUrl, vm));
+          haveHls = true;
+          continue;
+        }
+      }
+
       // The primary chain came up iframe-only; these embeds are /player/
       // pages on the same resolver, so try to turn one of them into a real
-      // m3u8 before settling for iframes.
-      if (!haveHls && this.isPlayerUrl(s.embed)) {
+      // m3u8 before settling for iframes — unless the primary resolve already
+      // proved this type's mirrors have none.
+      if (!haveHls && !primaryResolveExhausted && this.isPlayerUrl(s.embed)) {
         const resolved = await this.resolvePlayer(s.embed);
         if (resolved) {
+          for (const m of resolved.mirrors) mirrorByName.set(m.name, m.url);
+        }
+        if (resolved?.m3u8) {
+          const secondaryHeaders = { Referer: resolved.referer! };
+          const qualities = await this.qualitiesFor(resolved.m3u8, secondaryHeaders, false);
           results.unshift({
             name: `Anizen ${sName}${this.typeSuffix(s.type, t)}`,
             iframe: s.embed,
             sources: [{ file: resolved.m3u8, type: "hls" }],
+            ...(qualities.length > 0 ? { qualities } : {}),
             subtitles: resolved.subtitles.map((tr) => ({
               url: tr.file,
               lang: tr.label ?? tr.kind ?? undefined,
               type: t === "dub" ? "none" : "soft",
             })),
             download: null,
-            headers: { Referer: resolved.referer },
+            headers: secondaryHeaders,
           });
           if (resolved.intro && !resolvedIntro)
             resolvedIntro = [resolved.intro.start, resolved.intro.end];
@@ -774,12 +984,13 @@ export class Anizen {
           haveHls = true;
           continue;
         }
+        if (resolved) primaryResolveExhausted = true;
       }
 
       results.push({
         name: `Anizen ${sName}${this.typeSuffix(s.type, t)}`,
-        iframe: s.embed,
-        sources: [{ file: s.embed, type: "iframe" }],
+        iframe: iframeUrl,
+        sources: [{ file: iframeUrl, type: "iframe" }],
         subtitles: [],
         download: null,
       });
@@ -789,17 +1000,70 @@ export class Anizen {
     // the megaplay resolver returned (often the only source of skip markers).
     const introArr = Array.isArray(link?.intro) ? link.intro : null;
     const outroArr = Array.isArray(link?.outro) ? link.outro : null;
-    const intro: [number, number] | null = introArr
+    let intro: [number, number] | null = introArr
       ? [this.toInt(introArr[0]), this.toInt(introArr[1])]
       : resolvedIntro;
-    const outro: [number, number] | null = outroArr
+    let outro: [number, number] | null = outroArr
       ? [this.toInt(outroArr[0]), this.toInt(outroArr[1])]
       : resolvedOutro;
+
+    // Hindi comes off a different host (vidmoly) that ships no skip markers.
+    // Borrow the dub track's — measured across episodes, the Hindi encode
+    // matches the dub runtime to within 0.1s (1470.1s vs 1470.0s) while the
+    // sub encode runs ~11s longer, and that 11s is exactly the sub↔dub intro
+    // offset (ep1 145 vs 134, ep2 241 vs 230). So Hindi shares the dub
+    // timeline; borrowing from sub instead would fire every skip ~11s early.
+    if (t === "hindi" && !intro && !outro && results.length > 0) {
+      const borrowed = await this.borrowSkipTimes(parsed.slug, parsed.ep);
+      if (borrowed) {
+        intro = borrowed.intro;
+        outro = borrowed.outro;
+      }
+    }
+
     return {
       isDub: t === "dub",
       results,
       ...(intro ? { intro } : {}),
       ...(outro ? { outro } : {}),
     };
+  }
+
+  // Pulls intro/outro off the dub stream so the Hindi track can reuse them
+  // (see the call site for why dub and not sub). Note the markers do NOT come
+  // from anizen's own API — /api/stream returns intro/outro: null for dub —
+  // they come from the inner megaplay getSources payload, so this has to walk
+  // the player chain rather than just read the JSON. Returns null when the
+  // show has no dub or the chain yields no markers; callers go without.
+  private static async borrowSkipTimes(
+    slug: string,
+    ep: string,
+  ): Promise<{ intro: [number, number] | null; outro: [number, number] | null } | null> {
+    const raw = await this.fetchStream(slug, ep, "dub");
+    const link = raw?.results?.streamingLink;
+    // Only trust markers that came back on an actual dub stream — upstream
+    // falls back to sub when no dub exists, and those timings are offset.
+    if (!this.serverMatchesType(link, "dub")) return null;
+
+    const asPair = (v: unknown): [number, number] | null =>
+      Array.isArray(v) ? [this.toInt(v[0]), this.toInt(v[1])] : null;
+
+    let intro = asPair(link?.intro);
+    let outro = asPair(link?.outro);
+
+    if (!intro && !outro) {
+      const file = link?.link?.file;
+      if (typeof file === "string" && this.isPlayerUrl(file)) {
+        const resolved = await this.resolvePlayer(file);
+        if (resolved?.intro) intro = [resolved.intro.start, resolved.intro.end];
+        if (resolved?.outro) outro = [resolved.outro.start, resolved.outro.end];
+      }
+    }
+
+    // [0,0] is upstream's "unknown", not a real marker.
+    const usable = (v: [number, number] | null) => (v && (v[0] > 0 || v[1] > 0) ? v : null);
+    const i = usable(intro);
+    const o = usable(outro);
+    return i || o ? { intro: i, outro: o } : null;
   }
 }

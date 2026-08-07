@@ -147,8 +147,16 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/anizen/genres                 → Available genres",
           "GET /anime/anizen/genre/:genre           → Browse by genre",
           "GET /anime/anizen/info/:id               → Full title details + episodes (JSON API)",
-          "GET /anime/anizen/watch/:episodeId       → Stream sources (query: type=sub|dub)",
+          "GET /anime/anizen/watch/:episodeId       → Stream sources (query: type=sub|dub|hindi|hsub)",
           "GET /anime/anizen/servers/:episodeId     → Episode servers (query: type)",
+          "    ↳ type=sub|dub   → HLS via HD-1 (megaplay); VidCloud-1/VidPlay-1/Vidstream-2 as iframe",
+          "    ↳ type=hindi     → HLS via VMoly (proxied); Abyss/Default/Mirror as iframe",
+          "    ↳ type=hsub      → HLS via VidPlay-1 (hardsubbed)",
+          "    ↳ HLS sources carry `qualities[]` (label/width/height/bandwidth/file) when the",
+          "      upstream publishes a ladder — hsub gives 1080p/720p/360p, others a single",
+          "      rendition. Each `file` is standalone: playable and downloadable on its own.",
+          "    ↳ hindi also carries multiple audio tracks (hi/ta/te/en/ja) inside its playlist,",
+          "      and borrows intro/outro skip markers from the dub track (shared timeline).",
         ],
 
         anivid: [

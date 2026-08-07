@@ -2,6 +2,10 @@ import * as cheerio from "cheerio";
 import { Logger } from "../../../core/logger.js";
 import { animekai as animekaiOrigin } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
+// The HLS variant parser is provider-agnostic; keep one copy rather than
+// duplicating it per provider.
+import { fetchVariants } from "../anizen/scraper/hls.js";
+import { getVivibebeSource, isVivibebeUrl } from "./scraper/vivibebe.js";
 import type {
   AnimeKaiEpisode,
   AnimeKaiInfo,
@@ -569,35 +573,57 @@ export class AnimeKai {
       const players = await this.fetchEpisodePlayers(episodeId);
       const matching = players.filter((p) => this.langMatches(p.lang, want));
 
-      // Players are third-party embeds (vivibebe / otakuhg / otakuvid /
-      // playmogo) rather than the old MegaUp links, so there is nothing left to
-      // decrypt — but also no direct m3u8 to hand back. Surface them as iframes.
+      // Players are third-party embeds rather than the old MegaUp links. Only
+      // vivibebe (the default HD-1 host) reduces to a direct stream; otakuhg /
+      // otakuvid / playmogo hide theirs behind packed scripts and stay iframes.
       // Some carry their subtitle track as a `sub`/`caption_1` query param.
-      const results = matching.map((p) => {
-        let subtitles: any[] = [];
-        try {
-          const q = new URL(p.url).searchParams;
-          const subUrl = q.get("sub") ?? q.get("caption_1");
-          if (subUrl) {
-            subtitles = [
-              {
-                url: subUrl,
-                lang: q.get("sub_1") ?? "English",
-                type: want === "dub" ? "none" : "soft",
-              },
-            ];
+      const results = await Promise.all(
+        matching.map(async (p) => {
+          let subtitles: any[] = [];
+          try {
+            const q = new URL(p.url).searchParams;
+            const subUrl = q.get("sub") ?? q.get("caption_1");
+            if (subUrl) {
+              subtitles = [
+                {
+                  url: subUrl,
+                  lang: q.get("sub_1") ?? "English",
+                  type: want === "dub" ? "none" : "soft",
+                },
+              ];
+            }
+          } catch {
+            /* leave subtitles empty */
           }
-        } catch {
-          /* leave subtitles empty */
-        }
 
-        return {
-          name: `Anikai ${p.name}${this.langSuffix(p.lang)}`,
-          iframe: p.url,
-          sources: [{ file: p.url, type: "iframe" }],
-          subtitles,
-          download: null,
-        };
+          const base = {
+            name: `Anikai ${p.name}${this.langSuffix(p.lang)}`,
+            iframe: p.url,
+            subtitles,
+            download: null,
+          };
+
+          if (isVivibebeUrl(p.url)) {
+            const m3u8 = await getVivibebeSource(p.url);
+            if (m3u8) {
+              // Plays with no Referer, and ships a real 360p/720p/1080p ladder.
+              const qualities = await fetchVariants(m3u8);
+              return {
+                ...base,
+                sources: [{ file: m3u8, type: "hls" }],
+                ...(qualities.length > 0 ? { qualities } : {}),
+              };
+            }
+          }
+
+          return { ...base, sources: [{ file: p.url, type: "iframe" }] };
+        }),
+      );
+
+      // Direct streams first so clients default to a playable source.
+      results.sort((a: any, b: any) => {
+        const rank = (r: any) => (r.sources[0]?.type === "hls" ? 0 : 1);
+        return rank(a) - rank(b);
       });
 
       return { isDub: want === "dub", results };

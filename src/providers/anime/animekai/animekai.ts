@@ -488,12 +488,25 @@ export class AnimeKai {
   //   <span class="tab tab_N" data-id="sub">
   // Tab order varies per title (not every anime has all three), so the mapping is
   // built from the bar rather than assumed.
+  // The watch page is ~270 KB and the origin serves it slowly (measured ~6.5s),
+  // so cache the parsed player list briefly. /watch and /servers are usually
+  // called back-to-back for the same episode, and every audio type is read off
+  // the one page — without this each of those repeats the whole download.
+  private static playersCache = new Map<
+    string,
+    { at: number; players: { name: string; url: string; lang: string }[] }
+  >();
+  private static PLAYERS_TTL_MS = 5 * 60_000;
+
   private static async fetchEpisodePlayers(
     episodeId: string,
   ): Promise<{ name: string; url: string; lang: string }[]> {
     const animeSlug = episodeId.split("$")[0]!;
     const epNum = /\$ep=([^$]+)/.exec(episodeId)?.[1] ?? "1";
     const pageUrl = `${this.baseUrl}/watch/${animeSlug}/ep-${epNum}`;
+
+    const cached = this.playersCache.get(pageUrl);
+    if (cached && Date.now() - cached.at < this.PLAYERS_TTL_MS) return cached.players;
 
     const res = await fetch(pageUrl, {
       headers: { ...this.headers(), Referer: `${this.baseUrl}/watch/${animeSlug}` },
@@ -520,7 +533,49 @@ export class AnimeKai {
       });
     });
 
+    if (players.length > 0) this.playersCache.set(pageUrl, { at: Date.now(), players });
     return players;
+  }
+
+  // anikai keeps listing servers whose video has since been removed — the
+  // Doodstream (playmogo) entry commonly answers with its own "Video not
+  // found" page. Those are HTTP 200 (or a transient 403 under rate limiting),
+  // so status alone can't be trusted; the body has to be inspected.
+  private static readonly DEAD_PLAYER_MARKERS =
+    /video not found|file not found|we can't find the file|no longer available|has been deleted|Error Code:\s*410/i;
+
+  private static deadCache = new Map<string, { at: number; dead: boolean }>();
+  private static DEAD_TTL_MS = 10 * 60_000;
+
+  private static async isDeadPlayer(url: string): Promise<boolean> {
+    const hit = this.deadCache.get(url);
+    if (hit && Date.now() - hit.at < this.DEAD_TTL_MS) return hit.dead;
+
+    let dead: boolean;
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": USER_AGENT,
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          Referer: `${this.baseUrl}/`,
+        },
+        // Never let a slow embed host dominate the watch response.
+        signal: AbortSignal.timeout(3000),
+      });
+      const body = await res.text();
+      // Only a served page that *says* the video is gone counts. Some hosts
+      // (playmogo/Doodstream) sit behind a Cloudflare challenge and answer 403
+      // "Just a moment…" to any server-side fetch while still playing fine in
+      // a real WebView, which solves the challenge — dropping those would
+      // remove working servers.
+      dead = res.ok && this.DEAD_PLAYER_MARKERS.test(body);
+    } catch {
+      // Timeout or network failure is not proof the video is gone.
+      dead = false;
+    }
+
+    this.deadCache.set(url, { at: Date.now(), dead });
+    return dead;
   }
 
   /** upstream lang token (hsub/sub/dub) → the API's subOrDub vocabulary */
@@ -616,7 +671,11 @@ export class AnimeKai {
             }
           }
 
-          return { ...base, sources: [{ file: p.url, type: "iframe" }] };
+          // Not resolvable to a stream — check the embed actually still has a
+          // video before offering it. (HLS entries above skip this: extracting
+          // a playlist already proves the server is alive.)
+          const dead = await this.isDeadPlayer(p.url);
+          return { ...base, sources: [{ file: p.url, type: "iframe" }], dead };
         }),
       );
 
@@ -626,7 +685,13 @@ export class AnimeKai {
         return rank(a) - rank(b);
       });
 
-      return { isDub: want === "dub", results };
+      const live = results.filter((r: any) => !r.dead);
+      // If every server looked dead, the check is more likely wrong than the
+      // whole episode being gone — fall back to the unfiltered list.
+      const chosen = live.length > 0 ? live : results;
+      for (const r of chosen) delete (r as any).dead;
+
+      return { isDub: want === "dub", results: chosen };
     } catch (err) {
       Logger.error(`AnimeKai streams error: ${String(err)}`);
       return { isDub: false, results: [] };

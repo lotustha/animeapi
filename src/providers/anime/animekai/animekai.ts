@@ -5,6 +5,7 @@ import { USER_AGENT } from "../animepahe/scraper/index.js";
 // The HLS variant parser is provider-agnostic; keep one copy rather than
 // duplicating it per provider.
 import { fetchVariants } from "../anizen/scraper/hls.js";
+import { getEarnvidsQualities, isEarnvidsUrl } from "./scraper/earnvids.js";
 import { getVivibebeSource, isVivibebeUrl } from "./scraper/vivibebe.js";
 import type {
   AnimeKaiEpisode,
@@ -771,6 +772,22 @@ export class AnimeKai {
           };
         })
         .filter((r) => r.servers.length > 0);
+
+      // EarnVids is the one host that breaks its file into quality tiers, so
+      // enrich those entries with resolution + size per tier. One fetch per
+      // EarnVids server; the route caches the whole response for a day.
+      await Promise.all(
+        rows.flatMap((row) =>
+          row.servers
+            .filter((s) => isEarnvidsUrl(s.url))
+            .map(async (s) => {
+              const q = await getEarnvidsQualities(s.url);
+              if (!q) return;
+              (s as any).filename = q.filename;
+              (s as any).qualities = q.qualities;
+            }),
+        ),
+      );
 
       const subtitles = $(".ak-download-server")
         .toArray()

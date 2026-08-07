@@ -529,6 +529,21 @@ export class Anizen {
     return /^https?:\/\/[^/]*(?:aniapi|cdn|api)\.anizen\.[a-z]+\/player\//i.test(url);
   }
 
+  // Clients embed these URLs directly. anizen's resolver emits `?autoplay=true`,
+  // but the megaplay-family players honour `?autostart=true` — the autoplay
+  // form is what was coming back 410 in the app. Normalise every embed URL we
+  // hand out so it matches the form the players actually accept.
+  private static normalizeEmbedUrl(url: string): string {
+    try {
+      const u = new URL(url);
+      if (u.searchParams.has("autoplay")) u.searchParams.delete("autoplay");
+      u.searchParams.set("autostart", "true");
+      return u.toString();
+    } catch {
+      return url;
+    }
+  }
+
   // Browser-shaped headers for /player/<token>/resolve. The gate checks for
   // Chromium client hints + Sec-Fetch metadata, not just the User-Agent.
   private static resolveHeaders(referer: string): Record<string, string> {
@@ -726,7 +741,7 @@ export class Anizen {
         const baseName = s.serverName ?? s.server_name ?? "unknown";
         return {
           name: `anizen ${baseName}${this.typeSuffix(s.type, type)}`.toLowerCase(),
-          url: mirrorByName.get(baseName) ?? s.embed,
+          url: this.normalizeEmbedUrl(mirrorByName.get(baseName) ?? s.embed),
           isDub: type === "dub",
           intro: { start: this.toInt(intro[0]), end: this.toInt(intro[1]) },
           outro: { start: this.toInt(outro[0]), end: this.toInt(outro[1]) },
@@ -877,10 +892,7 @@ export class Anizen {
           const qualities = await this.qualitiesFor(resolved.m3u8, primaryHeaders, false);
           results.push({
             name,
-            // Inner embed, never the api.anizen.tr/player wrapper — the wrapper
-            // is the page that renders "Video not loading? Set your DNS…", so a
-            // client falling back from HLS to the iframe must not land there.
-            iframe: resolved.innerUrl || file,
+            iframe: this.normalizeEmbedUrl(resolved.innerUrl || file),
             sources: [{ file: resolved.m3u8, type: "hls" }],
             ...(qualities.length > 0 ? { qualities } : {}),
             subtitles,
@@ -914,10 +926,11 @@ export class Anizen {
             // Resolve worked but no mirror yields an m3u8 (hindi's external
             // hosts) — surface the *inner* embed, which browsers can load,
             // instead of the api.anizen.tr wrapper page.
+            const innerUrl = this.normalizeEmbedUrl(resolved.innerUrl);
             results.push({
               name,
-              iframe: resolved.innerUrl,
-              sources: [{ file: resolved.innerUrl, type: "iframe" }],
+              iframe: innerUrl,
+              sources: [{ file: innerUrl, type: "iframe" }],
               subtitles: upstreamSubs,
               download: null,
             });
@@ -953,7 +966,7 @@ export class Anizen {
 
       // Prefer the mirror map's inner embed (directly loadable) over the
       // api.anizen.tr wrapper page.
-      const iframeUrl = mirrorByName.get(sName) ?? s.embed;
+      const iframeUrl = this.normalizeEmbedUrl(mirrorByName.get(sName) ?? s.embed);
 
       // Vidmoly (the "VMoly" Hindi mirror) inlines a real HLS source. This is
       // deliberately NOT gated on primaryResolveExhausted: that flag only means
@@ -984,7 +997,7 @@ export class Anizen {
           const qualities = await this.qualitiesFor(resolved.m3u8, secondaryHeaders, false);
           results.unshift({
             name: `Anizen ${sName}${this.typeSuffix(s.type, t)}`,
-            iframe: resolved.innerUrl || s.embed,
+            iframe: this.normalizeEmbedUrl(resolved.innerUrl || s.embed),
             sources: [{ file: resolved.m3u8, type: "hls" }],
             ...(qualities.length > 0 ? { qualities } : {}),
             subtitles: this.mapSubtitles(resolved.subtitles, t, secondaryHeaders),

@@ -735,6 +735,30 @@ export class Anizen {
       .filter((s: AnizenServer | null): s is AnizenServer => s !== null);
   }
 
+  // Subtitle sidecars sit on CDNs that hard-check Referer — every one of them
+  // (megaplay's 1oe.lostproject.club, vidtube's vidtub.mikora.top) returns 403
+  // to a bare request and 200 with the player's Referer. Players inject that
+  // header when fetching the *video* but not when fetching a .vtt track, so a
+  // raw URL here means the stream plays with no subtitles at all. Route them
+  // through /proxy/fetch so the server re-requests them with the right headers.
+  private static mapSubtitles(
+    tracks: any[],
+    t: AnizenAudioType,
+    headers?: Record<string, string>,
+  ): { url?: string; lang?: string; type: string }[] {
+    const canProxy = Boolean(SERVER_ORIGIN) && Boolean(headers);
+    return tracks
+      .filter((tr: any) => tr?.kind !== "thumbnails")
+      .map((tr: any) => {
+        const raw: string | undefined = tr.file ?? tr.url ?? undefined;
+        return {
+          url: raw && canProxy ? proxifyFetch(raw, headers) : raw,
+          lang: tr.label ?? tr.kind ?? undefined,
+          type: t === "dub" ? "none" : "soft",
+        };
+      });
+  }
+
   // Reads the variant ladder off a master playlist so clients can offer a
   // quality picker or download a specific rendition. Costs one extra fetch per
   // HLS source, so it's only called on the single source we actually resolved.
@@ -780,11 +804,7 @@ export class Anizen {
       iframe: iframeUrl,
       sources: [{ file, type: "hls" }],
       ...(qualities.length > 0 ? { qualities } : {}),
-      subtitles: vm.subtitles.map((tr) => ({
-        url: proxied ? proxifyFetch(tr.file, headers) : tr.file,
-        lang: tr.label,
-        type: "soft",
-      })),
+      subtitles: this.mapSubtitles(vm.subtitles, t, headers),
       download: null,
       // Already proxied — the client needs no special headers of its own.
       ...(proxied ? {} : { headers }),
@@ -830,13 +850,9 @@ export class Anizen {
       const name = `Anizen ${link.server ?? "primary"}${this.typeSuffix(link.type, t)}`;
       seen.add(link.server ?? "");
       const upstreamTracks = Array.isArray(link.tracks) ? link.tracks : [];
-      const upstreamSubs = upstreamTracks
-        .filter((tr: any) => tr?.kind !== "thumbnails")
-        .map((tr: any) => ({
-          url: tr.file ?? tr.url ?? undefined,
-          lang: tr.label ?? tr.kind ?? undefined,
-          type: t === "dub" ? "none" : "soft",
-        }));
+      // No player referer known at this point; these are only used on the
+      // fallback paths where the chain never resolved.
+      const upstreamSubs = this.mapSubtitles(upstreamTracks, t);
 
       const file = link.link.file as string;
       const isAlreadyHls = /\.m3u8(\?|$)/i.test(file);
@@ -850,13 +866,12 @@ export class Anizen {
           for (const m of resolved.mirrors) mirrorByName.set(m.name, m.url);
         }
         if (resolved?.m3u8) {
-          const resolvedSubs = resolved.subtitles.map((tr) => ({
-            url: tr.file,
-            lang: tr.label ?? tr.kind ?? undefined,
-            type: t === "dub" ? "none" : "soft",
-          }));
-          const subtitles = resolvedSubs.length > 0 ? resolvedSubs : upstreamSubs;
-          const primaryHeaders = { Referer: resolved.referer! };
+          const primaryHeaders = { Referer: resolved.referer!, "User-Agent": USER_AGENT };
+          const resolvedSubs = this.mapSubtitles(resolved.subtitles, t, primaryHeaders);
+          const subtitles =
+            resolvedSubs.length > 0
+              ? resolvedSubs
+              : this.mapSubtitles(upstreamTracks, t, primaryHeaders);
           // megaplay/vidtube ladders are plain signed URLs — no proxying, the
           // client fetches them directly with the same Referer.
           const qualities = await this.qualitiesFor(resolved.m3u8, primaryHeaders, false);
@@ -962,18 +977,14 @@ export class Anizen {
           for (const m of resolved.mirrors) mirrorByName.set(m.name, m.url);
         }
         if (resolved?.m3u8) {
-          const secondaryHeaders = { Referer: resolved.referer! };
+          const secondaryHeaders = { Referer: resolved.referer!, "User-Agent": USER_AGENT };
           const qualities = await this.qualitiesFor(resolved.m3u8, secondaryHeaders, false);
           results.unshift({
             name: `Anizen ${sName}${this.typeSuffix(s.type, t)}`,
             iframe: s.embed,
             sources: [{ file: resolved.m3u8, type: "hls" }],
             ...(qualities.length > 0 ? { qualities } : {}),
-            subtitles: resolved.subtitles.map((tr) => ({
-              url: tr.file,
-              lang: tr.label ?? tr.kind ?? undefined,
-              type: t === "dub" ? "none" : "soft",
-            })),
+            subtitles: this.mapSubtitles(resolved.subtitles, t, secondaryHeaders),
             download: null,
             headers: secondaryHeaders,
           });

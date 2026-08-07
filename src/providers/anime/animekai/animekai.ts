@@ -36,6 +36,33 @@ export class AnimeKai {
     };
   }
 
+  // The watch page is ~270 KB (it inlines every episode plus every server) and
+  // the origin serves it in ~6.5s. info() and fetchEpisodePlayers() both need
+  // it, so share one fetch between them rather than paying that twice.
+  private static htmlCache = new Map<string, { at: number; html: string }>();
+  private static HTML_TTL_MS = 5 * 60_000;
+
+  private static async fetchWatchHtml(url: string, referer?: string): Promise<string | null> {
+    const hit = this.htmlCache.get(url);
+    if (hit && Date.now() - hit.at < this.HTML_TTL_MS) return hit.html;
+
+    const res = await fetch(url, {
+      headers: { ...this.headers(), ...(referer ? { Referer: referer } : {}) },
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    // Bound the cache — these entries are large.
+    if (this.htmlCache.size > 40) {
+      for (const [k, v] of this.htmlCache) {
+        if (Date.now() - v.at > this.HTML_TTL_MS) this.htmlCache.delete(k);
+      }
+      if (this.htmlCache.size > 40) this.htmlCache.clear();
+    }
+    this.htmlCache.set(url, { at: Date.now(), html });
+    return html;
+  }
+
   // ─── Paginated Card Scraper ──────────────────────────────────────────────────
 
   private static async scrapeCardPage(
@@ -318,10 +345,8 @@ export class AnimeKai {
   static async info(id: string): Promise<AnimeKaiInfo | null> {
     try {
       const animeSlug = id.split("$")[0]!;
-      const res = await fetch(`${this.baseUrl}/watch/${animeSlug}`, {
-        headers: this.headers(),
-      });
-      const html = await res.text();
+      const html = await this.fetchWatchHtml(`${this.baseUrl}/watch/${animeSlug}`);
+      if (!html) return null;
       const $ = cheerio.load(html);
 
       const info: any = {
@@ -509,11 +534,9 @@ export class AnimeKai {
     const cached = this.playersCache.get(pageUrl);
     if (cached && Date.now() - cached.at < this.PLAYERS_TTL_MS) return cached.players;
 
-    const res = await fetch(pageUrl, {
-      headers: { ...this.headers(), Referer: `${this.baseUrl}/watch/${animeSlug}` },
-    });
-    if (!res.ok) return [];
-    const $ = cheerio.load(await res.text());
+    const html = await this.fetchWatchHtml(pageUrl, `${this.baseUrl}/watch/${animeSlug}`);
+    if (!html) return [];
+    const $ = cheerio.load(html);
 
     const tabLang = new Map<string, string>();
     $(".server-type .tab, .server-tab .tab").each((i, el) => {

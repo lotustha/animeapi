@@ -409,6 +409,25 @@ export class Anizen {
       };
     });
 
+    // Upstream announces the next episode of an airing show before it has any
+    // source — /api/stream for it returns success:true with servers:[] and no
+    // streamingLink, so it lists in /info but plays nothing. Trim those from
+    // the tail. Only airing shows are checked, and only from the end, so this
+    // costs at most a couple of extra requests and nothing for finished shows.
+    let trimmed = false;
+    if (/currently airing/i.test(animeInfo.Status ?? "")) {
+      const MAX_TRIM = 3;
+      for (let i = 0; i < MAX_TRIM && episodes.length > 0; i++) {
+        const last = episodes[episodes.length - 1]!;
+        if (await this.hasPlayableStream(data.id, String(last.number))) break;
+        Logger.warn(
+          `Anizen: dropping ${data.id} ep${last.number} — announced upstream but has no source`,
+        );
+        episodes.pop();
+        trimmed = true;
+      }
+    }
+
     const recRaw = Array.isArray(data.recommended_data)
       ? data.recommended_data
       : Array.isArray(raw?.results?.recommended_data)
@@ -451,7 +470,10 @@ export class Anizen {
       description: animeInfo.Overview ?? undefined,
       type: data.showType ?? tv.showType ?? undefined,
       url: `${this.site}/details/${data.id}`,
-      totalEpisodes: this.toInt(data.episodes?.totalEpisodes) || episodes.length,
+      // Once we've dropped unreleased episodes, upstream's count is stale.
+      totalEpisodes: trimmed
+        ? episodes.length
+        : this.toInt(data.episodes?.totalEpisodes) || episodes.length,
       status: animeInfo.Status ?? undefined,
       season: animeInfo.Premiered ?? undefined,
       duration: animeInfo.Duration ?? tv.duration ?? undefined,
@@ -490,6 +512,22 @@ export class Anizen {
     if (type === "hindi") return "hindi";
     if (type === "hsub") return "hsub";
     return "sub";
+  }
+
+  // True when upstream can actually serve something for this episode. An
+  // announced-but-unreleased episode answers success:true with an empty
+  // servers array and no streamingLink.
+  private static async hasPlayableStream(slug: string, ep: string): Promise<boolean> {
+    try {
+      const raw = await this.fetchStream(slug, ep, "sub");
+      const results = raw?.results;
+      if (!results) return false;
+      const servers = Array.isArray(results.servers) ? results.servers : [];
+      return servers.length > 0 || Boolean(results.streamingLink?.link?.file);
+    } catch {
+      // Network hiccup — assume playable rather than hiding a real episode.
+      return true;
+    }
   }
 
   private static async fetchStream(

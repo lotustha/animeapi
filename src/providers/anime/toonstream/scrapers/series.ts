@@ -1,162 +1,109 @@
 import * as cheerio from "cheerio";
 import { Cache } from "../lib/cache.js";
-import { EPISODE_IFRAMES_TTL, TOONSTREAM_BASE } from "../lib/const.js";
+import { EPISODE_IFRAMES_TTL, TOONSTREAM_BASE, UserAgent } from "../lib/const.js";
+import { absolute, parseCard, parsePagination, slugOf } from "../lib/parse.js";
 import { AnimeCard, Cast, Episode, Genre, Season, Tag } from "../lib/types.js";
 import { getDirectSources, getPlayerIframeUrls } from "./source.js";
 
 export async function ScrapeSeries(page: number = 1) {
-  const url = TOONSTREAM_BASE + "/series/" + (page == 1 ? "" : `page/${page}/`);
+  const url = TOONSTREAM_BASE + "/series" + (page === 1 ? "" : `/page/${page}`);
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: { "User-Agent": UserAgent } });
     if (!res.ok) throw new Error("Failed to fetch " + url);
 
-    const html = await res.text();
-    const $ = cheerio.load(html, { xml: true });
+    const $ = cheerio.load(await res.text());
 
     const data: AnimeCard[] = [];
+    $("section.movies ul.post-lst li").each((_, item) => {
+      const card = parseCard($, item);
+      if (card) data.push(card);
+    });
 
-    const sect = $("main section.movies").first();
-    $(sect)
-      .find(".aa-cn ul li")
-      .each((_, item) => {
-        const title = $(item).find("article header h2.entry-title").text();
-        const url = $(item).find("article a").attr("href") || "";
-        const poster = $(item).find("article .post-thumbnail img").attr("src") || "";
-
-        if (!url || !poster) return;
-
-        const type = url.startsWith(TOONSTREAM_BASE + "/series") ? "series" : "movie";
-        const tmdbRating = Number(
-          $(item).find("article header .vote").text().replace("TMDB", "").trim(),
-        );
-        const slug = url.split("/").reverse()[1];
-
-        data.push({ type, title, slug, poster, url, tmdbRating });
-      });
-
-    // pagination
-    const start = 1;
-    const current = page;
-    const end = Number($("nav.pagination a.page-link").last().text() || 1);
-
-    const pagination = { current, start, end };
-    return { pagination, data };
+    return { pagination: parsePagination($, page), data };
   } catch (err) {
     console.log("ERROR", err);
   }
 }
 
-export async function ScrapeSeriesInfo(url: string) {
-  // if (url.startsWith("http") && !url.startsWith(TOONSTREAM_BASE)) return; // avoid urls other than toonstream's
+/** Shared detail-page parser — /series/<slug> and /movies/<slug> use one template. */
+export function parseDetail($: cheerio.CheerioAPI) {
+  const article = $("article.post, #aa-wp article").first();
 
-  // const decodedURL = url.startsWith("http") ? decodeURIComponent(url) : `${TOONSTREAM_BASE}/series/${url}`; // url or slug
-  const decodedURL = `${TOONSTREAM_BASE}/series/info/${url}/`; // slug only
-  console.log("Fetching", decodedURL);
+  const title = article.find(".entry-title").first().text().trim();
+  if (!title) return null;
 
+  const year = article.find(".year").first().text().trim();
+  const description = article.find(".description p").first().text().trim();
+  const tmdbRating = Number(article.find(".vote .num").first().text().trim()) || 0;
+
+  const genres: Genre[] = [];
+  article.find(".genres a").each((_, el) => {
+    const href = $(el).attr("href");
+    const name = $(el).text().trim();
+    if (!href || !name) return;
+    genres.push({ name, slug: slugOf(href), url: absolute(href) });
+  });
+
+  const tags: Tag[] = [];
+  article.find(".tag a, span.tag a").each((_, el) => {
+    const href = $(el).attr("href");
+    const name = $(el).text().trim();
+    if (!href || !name) return;
+    tags.push({ name, url: absolute(href) });
+  });
+
+  // Cast is injected client-side into <p class="loadactor"> on some pages, so
+  // it can legitimately come back empty.
+  const casts: Cast[] = [];
+  article.find(".cast-lst a").each((_, el) => {
+    const href = $(el).attr("href");
+    const name = $(el).text().trim();
+    if (!href || !name) return;
+    casts.push({ name, url: absolute(href) });
+  });
+
+  return { title, year, description, tmdbRating, genres, tags, casts };
+}
+
+export async function ScrapeSeriesInfo(slug: string) {
+  const url = `${TOONSTREAM_BASE}/series/${slug}`;
   try {
-    const res = await fetch(decodedURL);
-    if (!res.ok) throw new Error("Failed to fetch " + decodedURL);
+    const res = await fetch(url, { headers: { "User-Agent": UserAgent } });
+    if (!res.ok) throw new Error("Failed to fetch " + url);
 
-    const html = await res.text();
-    const $ = cheerio.load(html, { xml: true });
+    const $ = cheerio.load(await res.text());
+    const base = parseDetail($);
+    if (!base) throw new Error("title not found for " + url);
 
-    // basic info
-    const article = $("#aa-wp article.single");
+    // Season buttons carry the AJAX path:
+    //   <a class="season-btn" data-season="1" data-url="/series/<slug>/season/1">
+    const seasonRefs: { no: number; url: string }[] = [];
+    $(".season-btn, [data-season]").each((_, el) => {
+      const no = Number($(el).attr("data-season"));
+      const dataUrl = $(el).attr("data-url");
+      if (!Number.isFinite(no) || no <= 0) return;
+      if (seasonRefs.some((s) => s.no === no)) return;
+      seasonRefs.push({ no, url: absolute(dataUrl || `/series/${slug}/season/${no}`) });
+    });
 
-    const title = $(article).find("header .entry-title").text();
+    // Single-season shows render the episode list inline with no buttons.
+    if (seasonRefs.length === 0) seasonRefs.push({ no: 1, url: `${url}/season/1` });
 
-    // if title not found return no data
-    if (!title) throw new Error("title not found for " + decodedURL);
+    const seasons: Season[] = [];
+    for (const ref of seasonRefs) {
+      const episodes = await fetchSeasonEpisodes(ref.url, url);
+      seasons.push({ label: `Season ${ref.no}`, season_no: ref.no, episodes });
+    }
 
-    const year = $(article).find("header .entry-meta .year").text();
-    const totalSeasons = Number(
-      $(article).find("header .entry-meta .seasons").text().replace("Seasons", "").trim(),
-    );
-    const totalEpisodes = Number(
-      $(article).find("header .entry-meta .episodes").text().replace("Episodes", "").trim(),
-    );
-
-    const $paragraphs = $(article).find(".description p");
-    const description = $paragraphs.eq(0).text();
-    const languages = $paragraphs
-      .eq(1)
-      .text()
-      .replace("Language:", "")
-      .trim()
-      .split("–")
-      .filter(Boolean)
-      .map((e) => e.trim());
-    const qualities = $paragraphs
-      .eq(2)
-      .text()
-      .replace("Quality:", "")
-      .trim()
-      .split("|")
-      .filter(Boolean)
-      .map((e) => e.trim());
-    const runtime = $paragraphs.eq(3).text().replace("Running time:", "").trim();
-
-    const tmdbRating = Number($(article).find("footer .vote-cn span.num").text());
-
-    const genres: Genre[] = [];
-    const tags: Tag[] = [];
-    const casts: Cast[] = [];
-
-    $(article)
-      .find("header span.genres a")
-      .each((_, elem) => {
-        const name = $(elem).text();
-        const url = $(elem).attr("href");
-
-        const urlSplits = url?.split("/").reverse() || [];
-        const slug = urlSplits[0] || urlSplits[1];
-
-        if (!url || !slug) return;
-        genres.push({ name, slug, url });
-      });
-
-    $(article)
-      .find("header span.tag a")
-      .each((_, elem) => {
-        const name = $(elem).text();
-        const url = $(elem).attr("href");
-
-        if (!url) return;
-        tags.push({ name, url });
-      });
-
-    $(article)
-      .find(".cast-lst a")
-      .each((_, elem) => {
-        const name = $(elem).text();
-        const url = $(elem).attr("href");
-
-        if (!url) return;
-        casts.push({ name, url });
-      });
-
-    // seasons
-    const bodyClass = $("body").attr("class");
-    const match = bodyClass?.match(/postid-(\d+)/) || [];
-    const postId = match[1];
-
-    if (!postId) throw new Error("postid not found for " + url);
-
-    const seasons: Season[] = await getSeasonsByPostId(postId, 1, totalSeasons);
+    const totalEpisodes = seasons.reduce((n, s) => n + s.episodes.length, 0);
 
     return {
-      title,
-      year,
-      tmdbRating,
-      totalSeasons,
+      ...base,
+      totalSeasons: seasons.length,
       totalEpisodes,
-      description,
-      languages,
-      qualities,
-      runtime,
-      genres,
-      tags,
-      casts,
+      languages: [] as string[],
+      qualities: [] as string[],
+      runtime: "",
       seasons,
     };
   } catch (err) {
@@ -164,110 +111,91 @@ export async function ScrapeSeriesInfo(url: string) {
   }
 }
 
-async function getSeasonsByPostId(postId: string, start_season: number, end_season: number) {
-  const seasons: Season[] = [];
-
-  for (let i = start_season; i <= end_season; i++) {
-    const episodes: Episode[] = [];
-
-    const res = await fetch(TOONSTREAM_BASE + "/wp-admin/admin-ajax.php", {
+/** The season endpoint returns bare <li> episode fragments, not a full page. */
+async function fetchSeasonEpisodes(seasonUrl: string, referer: string): Promise<Episode[]> {
+  const episodes: Episode[] = [];
+  try {
+    const res = await fetch(seasonUrl, {
       headers: {
-        accept: "*/*",
-        "accept-language": "en-US,en;q=0.9,hi;q=0.8,bn;q=0.7",
-        "cache-control": "no-cache",
-        "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-        pragma: "no-cache",
-        priority: "u=1, i",
-        "sec-ch-ua": '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
-        "x-requested-with": "XMLHttpRequest",
+        "User-Agent": UserAgent,
+        Referer: referer,
+        "X-Requested-With": "XMLHttpRequest",
+        Accept: "text/html, */*; q=0.01",
       },
-      body: `action=action_select_season&season=${i}&post=${postId}`,
-      method: "POST",
     });
-
     if (!res.ok) {
-      console.log("Error: failed to fetch season " + i + " episodes for postid-" + postId);
-      continue;
+      console.log("Error: failed to fetch season at " + seasonUrl);
+      return episodes;
     }
 
-    const html = await res.text();
-    const $ = cheerio.load(html, { xml: true });
+    const $ = cheerio.load(await res.text());
+    $("li").each((i, ep) => {
+      const href = $(ep).find("a[href*='/episode/']").attr("href") ?? $(ep).find("a").attr("href");
+      if (!href) return;
+      const thumbnail = $(ep).find("img").first().attr("src") ?? "";
 
-    $("li").each((j, ep) => {
-      const url = $(ep).find("a").attr("href");
-      const thumbnail = $(ep).find("img").attr("src");
-
-      if (!url || !thumbnail) return;
-
-      const slug = url.split("/").reverse()[1];
-
-      const title = $(ep).find("header h2.entry-title").text();
-      const epXseason = $(ep).find("header .num-epi").text();
-
-      episodes.push({ episode_no: j + 1, slug, title, url, epXseason, thumbnail });
+      episodes.push({
+        episode_no: i + 1,
+        slug: slugOf(href),
+        title: $(ep).find(".entry-title1, .entry-title").first().text().trim(),
+        url: absolute(href),
+        epXseason: $(ep).find(".num-epi").first().text().trim(),
+        thumbnail,
+      });
     });
-
-    seasons.push({
-      label: `Season ${i}`,
-      season_no: i,
-      episodes,
-    });
+  } catch (err) {
+    console.log("ERROR fetching season", seasonUrl, err);
   }
-
-  return seasons;
+  return episodes;
 }
 
 export async function ScrapeEpisodeSources(slug: string, req: Request) {
   const urlObj = new URL(req.url);
   const season = urlObj.searchParams.get("season");
   const episode = urlObj.searchParams.get("episode");
-  const url = `${TOONSTREAM_BASE}/episode/${slug}-${season}x${episode}/`;
 
-  const key = `episode:iframes:${slug}:${season}:${episode}`;
+  // Episode slugs are "<series-slug>-<season>x<episode>". Accept a slug that
+  // already carries the suffix so callers can pass what /series/info returned.
+  const hasSuffix = /-\d+x\d+$/.test(slug);
+  const epSlug = hasSuffix ? slug : `${slug}-${season ?? 1}x${episode ?? 1}`;
+  const url = `${TOONSTREAM_BASE}/episode/${epSlug}/`;
+
+  const key = `episode:iframes:${epSlug}`;
   const cachedIframes = await Cache.get(key, true);
 
   if (cachedIframes) {
     const directSources = await getDirectSources(cachedIframes);
-    const targetUrl = cachedIframes.find((u: string) => u.includes("as-cdn21.top/video/"));
-    const hash = targetUrl?.match(/\/video\/([^/?#]+)/)?.[1] ?? null;
     return {
-      hash: hash || null,
+      hash: hashOf(cachedIframes),
       embeds: cachedIframes,
       sources: directSources,
     };
   }
 
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: { "User-Agent": UserAgent } });
     if (!res.ok) throw new Error("Failed to fetch " + url);
 
     const html = await res.text();
-    const $ = cheerio.load(html, { xml: true });
-
-    const toonStreamIframeUrls = $("aside#aa-options iframe")
-      .map((_, el) => $(el).attr("data-src"))
-      .get()
-      .filter(Boolean);
-
-    const playerIframeUrls = await getPlayerIframeUrls(toonStreamIframeUrls);
-    Cache.set(key, true, playerIframeUrls, EPISODE_IFRAMES_TTL);
+    const playerIframeUrls = await getPlayerIframeUrls(html, url);
+    if (playerIframeUrls.length > 0) {
+      Cache.set(key, true, playerIframeUrls, EPISODE_IFRAMES_TTL);
+    }
 
     const directSources = await getDirectSources(playerIframeUrls);
 
-    const targetUrl = playerIframeUrls.find((u: string) => u.includes("as-cdn21.top/video/"));
-    const hash = targetUrl?.match(/\/video\/([^/?#]+)/)?.[1] ?? null;
-
     return {
-      hash: hash || null,
+      hash: hashOf(playerIframeUrls),
       embeds: playerIframeUrls,
       sources: directSources,
     };
   } catch (err) {
     console.log("ERROR", err);
   }
+}
+
+/** as-cdn player id, kept for clients that relied on this field. */
+function hashOf(urls: string[]): string | null {
+  const target = urls.find((u) => u.includes("as-cdn21.top/video/"));
+  return target?.match(/\/video\/([^/?#]+)/)?.[1] ?? null;
 }

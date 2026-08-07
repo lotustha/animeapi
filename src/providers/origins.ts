@@ -5,7 +5,9 @@ export const hianime = "https://hianime.ws";
 export const anizen = "https://anizen.tr";
 export const anizen_api = "https://cdn.anizen.tr";
 export const anikoto = "https://anikoto.cz";
-export const toonstream = "https://toonstream.vip";
+// toonstream.vip 302s here; the site was rebuilt off WordPress onto a custom
+// app in 2026 (new URL scheme, /embed/<hash> player indirection).
+export const toonstream = "https://toon-stream.site";
 export const animesalt = "https://animesalt.ac";
 export const animelok = "https://animelok.net";
 export const aniwaves = "https://aniwaves.ru";

@@ -2,7 +2,6 @@ import * as cheerio from "cheerio";
 import { Logger } from "../../../core/logger.js";
 import { animekai as animekaiOrigin } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
-import { MegaUp } from "./scraper/megaup.js";
 import type {
   AnimeKaiEpisode,
   AnimeKaiInfo,
@@ -101,8 +100,10 @@ export class AnimeKai {
     page: number = 1,
   ): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
     if (page <= 0) page = 1;
+    // anikai.cc decodes %2B as a literal plus (the old domain treated it as a
+    // space), so encode the raw query and let spaces become %20.
     return this.scrapeCardPage(
-      `${this.baseUrl}/browser?keyword=${encodeURIComponent(query.replace(/[\W_]+/g, "+"))}&page=${page}`,
+      `${this.baseUrl}/browser?keyword=${encodeURIComponent(query)}&page=${page}`,
     );
   }
 
@@ -132,27 +133,27 @@ export class AnimeKai {
 
   static async movies(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
     if (page <= 0) page = 1;
-    return this.scrapeCardPage(`${this.baseUrl}/movie?page=${page}`);
+    return this.scrapeCardPage(`${this.baseUrl}/browser?type[]=2&page=${page}`);
   }
 
   static async tv(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
     if (page <= 0) page = 1;
-    return this.scrapeCardPage(`${this.baseUrl}/tv?page=${page}`);
+    return this.scrapeCardPage(`${this.baseUrl}/browser?type[]=1&page=${page}`);
   }
 
   static async ova(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
     if (page <= 0) page = 1;
-    return this.scrapeCardPage(`${this.baseUrl}/ova?page=${page}`);
+    return this.scrapeCardPage(`${this.baseUrl}/browser?type[]=3&page=${page}`);
   }
 
   static async ona(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
     if (page <= 0) page = 1;
-    return this.scrapeCardPage(`${this.baseUrl}/ona?page=${page}`);
+    return this.scrapeCardPage(`${this.baseUrl}/browser?type[]=4&page=${page}`);
   }
 
   static async specials(page: number = 1): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
     if (page <= 0) page = 1;
-    return this.scrapeCardPage(`${this.baseUrl}/special?page=${page}`);
+    return this.scrapeCardPage(`${this.baseUrl}/browser?type[]=5&page=${page}`);
   }
 
   static async genreSearch(
@@ -172,11 +173,15 @@ export class AnimeKai {
       const html = await res.text();
       const $ = cheerio.load(html);
       const results: string[] = [];
-      $("#menu")
-        .find("ul.c4 li a")
-        .each((_, ele) => {
-          results.push($(ele).text().trim().toLowerCase());
-        });
+      // The "#menu ul.c4" mega-menu is gone; genres are plain /genres/<slug>
+      // anchors now. Dedupe — the same links appear in nav and footer.
+      const seenGenres = new Set<string>();
+      $('a[href*="/genres/"]').each((_, ele) => {
+        const slug = ($(ele).attr("href") ?? "").split("/genres/")[1]?.split(/[?#]/)[0];
+        if (!slug || seenGenres.has(slug)) return;
+        seenGenres.add(slug);
+        results.push(slug.toLowerCase());
+      });
       return results;
     } catch (err) {
       Logger.error(`AnimeKai genres error: ${String(err)}`);
@@ -429,48 +434,36 @@ export class AnimeKai {
         });
       });
 
-      // Episodes
-      const aniId = $(".rate-box#anime-rating").attr("data-id");
-      if (!aniId) return info;
+      // Episodes.
+      //
+      // The site used to hand these out via /ajax/episodes/list?ani_id=…&_=<token>,
+      // keyed off #anime-rating[data-id] and a MegaUp-generated token. Both are
+      // gone: the element no longer exists and that endpoint now answers "404"
+      // for every id. Episodes are server-rendered into the watch page instead,
+      // and each anchor carries its own availability flags — so no token, no
+      // second request, and per-episode sub/dub accuracy rather than inferring
+      // it from a total count.
+      info.episodes = [];
+      $("div.eplist a[data-num]").each((_, el) => {
+        const el$ = $(el);
+        const numAttr = el$.attr("data-num");
+        const number = parseInt(numAttr ?? "", 10);
+        if (!Number.isFinite(number)) return;
+        if (info.episodes.some((e: AnimeKaiEpisode) => e.number === number)) return;
 
-      const episodesToken = await MegaUp.generateToken(aniId);
-      const episodesRes = await fetch(
-        `${this.baseUrl}/ajax/episodes/list?ani_id=${aniId}&_=${episodesToken}`,
-        {
-          headers: {
-            ...this.headers(),
-            "X-Requested-With": "XMLHttpRequest",
-            Referer: `${this.baseUrl}/watch/${animeSlug}`,
-          },
-        },
-      );
-      const epData = await episodesRes.json();
-      const epHtml = epData.result;
-
-      if (typeof epHtml === "string") {
-        const $$ = cheerio.load(epHtml);
-        info.totalEpisodes = $$("div.eplist > ul > li").length;
-        info.episodes = [];
-
-        const subCount = parseInt($(".entity-scroll > .info > span.sub").text()) || 0;
-        const dubCount = parseInt($(".entity-scroll > .info > span.dub").text()) || 0;
-
-        $$("div.eplist > ul > li > a").each((_, el) => {
-          const numAttr = $$(el).attr("num")!;
-          const tokenAttr = $$(el).attr("token")!;
-          const number = parseInt(numAttr);
-
-          info.episodes.push({
-            id: `${animeSlug}$ep=${numAttr}$token=${tokenAttr}`,
-            number,
-            title: $$(el).children("span").text().trim(),
-            isFiller: $$(el).hasClass("filler"),
-            isSubbed: number <= subCount,
-            isDubbed: number <= dubCount,
-            url: `${this.baseUrl}/watch/${animeSlug}${$$(el).attr("href")}ep=${numAttr}`,
-          });
+        const href = el$.attr("href") ?? `/watch/${animeSlug}/ep-${number}`;
+        info.episodes.push({
+          id: `${animeSlug}$ep=${number}`,
+          number,
+          title: el$.children("span").first().text().trim() || `Episode ${number}`,
+          isFiller: el$.hasClass("filler"),
+          isSubbed: el$.attr("data-sub") === "1" || el$.attr("data-hsub") === "1",
+          isDubbed: el$.attr("data-dub") === "1",
+          url: href.startsWith("http") ? href : `${this.baseUrl}${href}`,
         });
-      }
+      });
+      info.episodes.sort((a: AnimeKaiEpisode, b: AnimeKaiEpisode) => a.number - b.number);
+      info.totalEpisodes = info.episodes.length;
 
       return info;
     } catch (err) {
@@ -481,77 +474,83 @@ export class AnimeKai {
 
   // ─── Episode Servers ─────────────────────────────────────────────────────────
 
+  // Reads the player list off an episode page.
+  //
+  // Replaces the old three-request MegaUp chain (/ajax/links/list → /ajax/links/view
+  // → decodeIframeData, each needing a generated token). The site now renders every
+  // player straight into the page:
+  //   <span class="server-video" data-video="<embed url>" data-tab="tab_N">Name</span>
+  // with a language tab bar mapping tab_N to hsub / sub / dub:
+  //   <span class="tab tab_N" data-id="sub">
+  // Tab order varies per title (not every anime has all three), so the mapping is
+  // built from the bar rather than assumed.
+  private static async fetchEpisodePlayers(
+    episodeId: string,
+  ): Promise<{ name: string; url: string; lang: string }[]> {
+    const animeSlug = episodeId.split("$")[0]!;
+    const epNum = /\$ep=([^$]+)/.exec(episodeId)?.[1] ?? "1";
+    const pageUrl = `${this.baseUrl}/watch/${animeSlug}/ep-${epNum}`;
+
+    const res = await fetch(pageUrl, {
+      headers: { ...this.headers(), Referer: `${this.baseUrl}/watch/${animeSlug}` },
+    });
+    if (!res.ok) return [];
+    const $ = cheerio.load(await res.text());
+
+    const tabLang = new Map<string, string>();
+    $(".server-type .tab, .server-tab .tab").each((i, el) => {
+      const cls = ($(el).attr("class") ?? "").match(/tab_\d+/)?.[0];
+      const lang = $(el).attr("data-id");
+      if (cls && lang) tabLang.set(cls, lang);
+    });
+
+    const players: { name: string; url: string; lang: string }[] = [];
+    $(".server-video[data-video]").each((_, el) => {
+      const url = $(el).attr("data-video");
+      if (!url) return;
+      const tab = $(el).attr("data-tab") ?? "";
+      players.push({
+        name: $(el).text().trim() || "unknown",
+        url,
+        lang: tabLang.get(tab) ?? tab,
+      });
+    });
+
+    return players;
+  }
+
+  /** upstream lang token (hsub/sub/dub) → the API's subOrDub vocabulary */
+  private static langMatches(lang: string, want: "softsub" | "dub" | "hardsub"): boolean {
+    const l = lang.toLowerCase();
+    if (want === "dub") return l === "dub";
+    if (want === "hardsub") return l === "hsub";
+    return l === "sub" || l === "softsub";
+  }
+
+  private static langSuffix(lang: string): string {
+    const l = lang.toLowerCase();
+    if (l === "dub") return " (Dub)";
+    if (l === "hsub") return " (HardSub)";
+    return " (SoftSub)";
+  }
+
   static async fetchEpisodeServers(
     episodeId: string,
     subOrDub: "softsub" | "dub" | "hardsub" = "hardsub",
   ): Promise<AnimeKaiServer[]> {
     try {
-      const token = episodeId.split("$token=")[1];
-      if (!token) return [];
-
-      const ajaxToken = await MegaUp.generateToken(token);
-      const url = `${this.baseUrl}/ajax/links/list?token=${token}&_=${ajaxToken}`;
-      console.log(url);
-      const res = await fetch(url, { headers: this.headers() });
-      const data = await res.json();
-      const serverHtml = data.result;
-
-      if (typeof serverHtml !== "string") return [];
-
-      const $ = cheerio.load(serverHtml);
-      const servers: AnimeKaiServer[] = [];
-
-      const targetGroups =
-        subOrDub === "dub"
-          ? [{ id: "dub", type: "dub" as const }]
-          : [
-              { id: "sub", type: "hardsub" as const },
-              { id: "softsub", type: "softsub" as const },
-            ];
-
-      for (const group of targetGroups) {
-        const serverItems = $(`.server-items.lang-group[data-id="${group.id}"] .server`);
-
-        await Promise.all(
-          serverItems.toArray().map(async (server) => {
-            const lid = $(server).attr("data-lid");
-            if (!lid) return;
-
-            const viewToken = await MegaUp.generateToken(lid);
-            const viewRes = await fetch(
-              `${this.baseUrl}/ajax/links/view?id=${lid}&_=${viewToken}`,
-              {
-                headers: this.headers(),
-              },
-            );
-            const viewData = await viewRes.json();
-            const decoded = await MegaUp.decodeIframeData(viewData.result);
-
-            const suffix =
-              group.type === "hardsub"
-                ? " (HardSub)"
-                : group.type === "softsub"
-                  ? " (SoftSub)"
-                  : "";
-
-            servers.push({
-              name: `megaup ${$(server).text().trim()}${suffix}`.toLowerCase(),
-              url: decoded.url,
-              isDub: group.type === "dub",
-              intro: {
-                start: decoded.skip.intro[0],
-                end: decoded.skip.intro[1],
-              },
-              outro: {
-                start: decoded.skip.outro[0],
-                end: decoded.skip.outro[1],
-              },
-            });
-          }),
-        );
-      }
-
-      return servers;
+      const players = await this.fetchEpisodePlayers(episodeId);
+      return players
+        .filter((p) => this.langMatches(p.lang, subOrDub))
+        .map((p) => ({
+          name: `anikai ${p.name}${this.langSuffix(p.lang)}`.toLowerCase(),
+          url: p.url,
+          isDub: p.lang.toLowerCase() === "dub",
+          // The page no longer ships skip markers; they came from the decoded
+          // MegaUp payload that this endpoint no longer uses.
+          intro: { start: 0, end: 0 },
+          outro: { start: 0, end: 0 },
+        }));
     } catch (err) {
       Logger.error(`AnimeKai fetchEpisodeServers error: ${String(err)}`);
       return [];
@@ -566,88 +565,42 @@ export class AnimeKai {
     type?: "softsub" | "dub" | "hardsub",
   ): Promise<any> {
     try {
-      const token = episodeId.split("$token=")[1];
-      if (!token) return { isDub: false, results: [] };
+      const want = type ?? "hardsub";
+      const players = await this.fetchEpisodePlayers(episodeId);
+      const matching = players.filter((p) => this.langMatches(p.lang, want));
 
-      const ajaxToken = await MegaUp.generateToken(token);
-      const serversUrl = `${this.baseUrl}/ajax/links/list?token=${token}&_=${ajaxToken}`;
-      const res = await fetch(serversUrl, { headers: this.headers() });
-      const data = await res.json();
-      const serverHtml = data.result;
-
-      if (typeof serverHtml !== "string") return { isDub: false, results: [] };
-
-      const $ = cheerio.load(serverHtml);
-      const results: any[] = [];
-      const seen = new Set<string>();
-
-      const isDubRequest = type === "dub";
-      const targetGroups = isDubRequest
-        ? [{ id: "dub", label: "dub", subType: null }]
-        : [
-            { id: "sub", label: "hardsub", subType: "hard" },
-            { id: "softsub", label: "softsub", subType: "soft" },
-          ];
-
-      // Track intro and outro globally so they only appear once
-      let globalIntro: [number, number] | null = null;
-      let globalOutro: [number, number] | null = null;
-
-      for (const group of targetGroups) {
-        const serverItems = $(`.server-items.lang-group[data-id='${group.id}'] .server`);
-
-        for (const item of serverItems.toArray()) {
-          const lid = $(item).attr("data-lid");
-          if (!lid || seen.has(lid)) continue;
-          seen.add(lid);
-
-          const viewToken = await MegaUp.generateToken(lid);
-          const viewData = await (
-            await fetch(`${this.baseUrl}/ajax/links/view?id=${lid}&_=${viewToken}`, {
-              headers: this.headers(),
-            })
-          ).json();
-          console.log("VIEW DATA: ", viewData);
-          const decoded = await MegaUp.decodeIframeData(viewData.result);
-          console.log("DECODED: ", decoded);
-          const videoSources = await MegaUp.extract(decoded.url);
-
-          // Set skip times from the first parsed server
-          if (!globalIntro && !globalOutro) {
-            globalIntro = decoded.skip.intro;
-            globalOutro = decoded.skip.outro;
+      // Players are third-party embeds (vivibebe / otakuhg / otakuvid /
+      // playmogo) rather than the old MegaUp links, so there is nothing left to
+      // decrypt — but also no direct m3u8 to hand back. Surface them as iframes.
+      // Some carry their subtitle track as a `sub`/`caption_1` query param.
+      const results = matching.map((p) => {
+        let subtitles: any[] = [];
+        try {
+          const q = new URL(p.url).searchParams;
+          const subUrl = q.get("sub") ?? q.get("caption_1");
+          if (subUrl) {
+            subtitles = [
+              {
+                url: subUrl,
+                lang: q.get("sub_1") ?? "English",
+                type: want === "dub" ? "none" : "soft",
+              },
+            ];
           }
-
-          const formattedSubtitles = (videoSources.subtitles || []).map((sub: any) => ({
-            ...sub,
-            type: group.subType || "none",
-          }));
-
-          const suffix =
-            group.label === "hardsub"
-              ? " (HardSub)"
-              : group.label === "softsub"
-                ? " (SoftSub)"
-                : group.label === "dub"
-                  ? " (Dub)"
-                  : "";
-
-          results.push({
-            name: `MegaUp ${$(item).text().trim()}${suffix}`,
-            iframe: decoded.url,
-            sources: videoSources.sources,
-            subtitles: formattedSubtitles,
-            download: videoSources.download,
-          });
+        } catch {
+          /* leave subtitles empty */
         }
-      }
 
-      return {
-        isDub: isDubRequest,
-        results,
-        ...(globalIntro && { intro: globalIntro }),
-        ...(globalOutro && { outro: globalOutro }),
-      };
+        return {
+          name: `Anikai ${p.name}${this.langSuffix(p.lang)}`,
+          iframe: p.url,
+          sources: [{ file: p.url, type: "iframe" }],
+          subtitles,
+          download: null,
+        };
+      });
+
+      return { isDub: want === "dub", results };
     } catch (err) {
       Logger.error(`AnimeKai streams error: ${String(err)}`);
       return { isDub: false, results: [] };

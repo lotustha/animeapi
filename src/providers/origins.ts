@@ -1,5 +1,6 @@
 export const animepahe = "https://animepahe.pw";
-export const animekai = "https://anikai.to";
+// anikai.to is dead; anikai.cc 302s to the www3 host, so point straight at it.
+export const animekai = "https://www3.anikai.cc";
 export const anigo = "https://anigo.to";
 export const hianime = "https://hianime.ws";
 export const anizen = "https://anizen.tr";

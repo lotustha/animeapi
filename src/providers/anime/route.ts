@@ -157,6 +157,10 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "      rendition. Each `file` is standalone: playable and downloadable on its own.",
           "    ↳ hindi also carries multiple audio tracks (hi/ta/te/en/ja) inside its playlist,",
           "      and borrows intro/outro skip markers from the dub track (shared timeline).",
+          "    ↳ `subtitles[].url` is routed through /proxy/fetch — the upstream VTT CDNs 403",
+          "      any request without the player's Referer, which players don't send for sidecar",
+          "      tracks. Fetch these URLs as-is; no extra headers needed. sub/hsub carry full",
+          "      dialogue, dub/hindi carry signs & songs only.",
         ],
 
         anivid: [

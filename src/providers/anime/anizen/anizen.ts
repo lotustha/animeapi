@@ -529,6 +529,17 @@ export class Anizen {
     return /^https?:\/\/[^/]*(?:aniapi|cdn|api)\.anizen\.[a-z]+\/player\//i.test(url);
   }
 
+  // megaplay.buzz refuses to serve its player to a request with no Referer —
+  // it returns HTTP 200 whose body is the "We can't find the file … Error
+  // Code: 410" page. Any non-empty Referer satisfies it; Origin alone does
+  // not. (vidwish.live and vidtube.site don't care either way.) A browser
+  // <iframe> sends this automatically, but an Android WebView loading the URL
+  // directly does not — hence the 410 in-app. Surfaced on every iframe source
+  // so clients know to pass it.
+  private static embedHeaders(): Record<string, string> {
+    return { Referer: `${this.site}/` };
+  }
+
   // Clients embed these URLs directly. anizen's resolver emits `?autoplay=true`,
   // but the megaplay-family players honour `?autostart=true` — the autoplay
   // form is what was coming back 410 in the app. Normalise every embed URL we
@@ -933,6 +944,7 @@ export class Anizen {
               sources: [{ file: innerUrl, type: "iframe" }],
               subtitles: upstreamSubs,
               download: null,
+              headers: this.embedHeaders(),
             });
           }
         } else {
@@ -944,6 +956,7 @@ export class Anizen {
             sources: [{ file, type: "iframe" }],
             subtitles: upstreamSubs,
             download: null,
+            headers: this.embedHeaders(),
           });
         }
       } else {
@@ -953,6 +966,7 @@ export class Anizen {
           sources: [{ file, type: isAlreadyHls ? (link.link.type ?? "hls") : "iframe" }],
           subtitles: upstreamSubs,
           download: null,
+          ...(isAlreadyHls ? {} : { headers: this.embedHeaders() }),
         });
         haveHls = isAlreadyHls;
       }
@@ -1020,6 +1034,7 @@ export class Anizen {
         sources: [{ file: iframeUrl, type: "iframe" }],
         subtitles: [],
         download: null,
+        headers: this.embedHeaders(),
       });
     }
 

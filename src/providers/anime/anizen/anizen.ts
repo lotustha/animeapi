@@ -877,7 +877,10 @@ export class Anizen {
           const qualities = await this.qualitiesFor(resolved.m3u8, primaryHeaders, false);
           results.push({
             name,
-            iframe: file,
+            // Inner embed, never the api.anizen.tr/player wrapper — the wrapper
+            // is the page that renders "Video not loading? Set your DNS…", so a
+            // client falling back from HLS to the iframe must not land there.
+            iframe: resolved.innerUrl || file,
             sources: [{ file: resolved.m3u8, type: "hls" }],
             ...(qualities.length > 0 ? { qualities } : {}),
             subtitles,
@@ -981,7 +984,7 @@ export class Anizen {
           const qualities = await this.qualitiesFor(resolved.m3u8, secondaryHeaders, false);
           results.unshift({
             name: `Anizen ${sName}${this.typeSuffix(s.type, t)}`,
-            iframe: s.embed,
+            iframe: resolved.innerUrl || s.embed,
             sources: [{ file: resolved.m3u8, type: "hls" }],
             ...(qualities.length > 0 ? { qualities } : {}),
             subtitles: this.mapSubtitles(resolved.subtitles, t, secondaryHeaders),

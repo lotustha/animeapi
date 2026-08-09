@@ -1,7 +1,8 @@
 import { SERVER_ORIGIN } from "../../../../core/config.js";
 import { DirectSource } from "./types.js";
 
-const prefix = "/toonstream";
+// Must match where route.ts is mounted (anime category router + own prefix).
+const prefix = "/anime/toonstream";
 
 export function proxifySource(source: DirectSource): DirectSource {
   const { type, url, headers } = source;

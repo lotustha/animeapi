@@ -1,35 +1,9 @@
 import { Elysia, t } from "elysia";
 import { Cache } from "../../../core/cache.js";
+import { SERVER_ORIGIN } from "../../../core/config.js";
 import { isTooLarge } from "../../../core/helper.js";
 import { Logger } from "../../../core/logger.js";
-import { ScrapeHomePage } from "./scrapers/home.js";
-import { ScrapeMovieInfo, ScrapeMovies, ScrapeMovieSources } from "./scrapers/movie.js";
-import { ScrapeSearch } from "./scrapers/search.js";
-import { ScrapeEpisodeSources, ScrapeSeries, ScrapeSeriesInfo } from "./scrapers/series.js";
-
-const HOME_CACHE_TTL = 43_200; // 12hr
-const SEARCH_CACHE_TTL = 43_200; // 12hr
-
-const MOVIES_PAGE_CACHE_TTL = 3600 * 24 * 30; // 30 days
-const SERIES_PAGE_CACHE_TTL = 3600 * 24 * 30; // 30 days
-
-const MOVIE_INFO_CACHE_TTL = 3600 * 24 * 14; // 14 days
-const SERIES_INFO_CACHE_TTL = 3600 * 24 * 3; // 3 days
-
-import { env } from "../../../core/runtime.js";
-
-export const SERVER_ORIGIN = env.SERVER_ORIGIN || "";
-export const PROXIFY = Boolean(env.PROXIFY) || false;
-
-if (!SERVER_ORIGIN && env.NODE_ENV !== "test") throw new Error("set SERVER_ORIGIN at .env!");
-
-console.log("auto source proxy is ", PROXIFY);
-
-const envOrigins = env.ALLOWED_ORIGINS;
-
-const ALLOWED_ORIGINS: string[] | "*" = envOrigins
-  ? envOrigins.split(",").map((o: string) => o.trim().replace(/\/$/, ""))
-  : "*";
+import { Toonstream } from "./toonstream.js";
 
 // for proxy safety
 const MAX_M3U8_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -47,287 +21,200 @@ export const toonstreamRoutes = new Elysia({ prefix: "/toonstream" })
   .get("/", () => {
     return {
       name: "toonstream-api",
-      version: "0.1",
+      version: "0.2",
       endpoints: [
-        prefix + "/home",
-        prefix + "/search/{query}/{page}",
+        prefix + "/search/{query}?page=",
+        prefix + "/suggestions/{query}",
+        prefix + "/spotlight",
+        prefix + "/recent-episodes",
+        prefix + "/movies?page=",
+        prefix + "/tv?page=",
+        prefix + "/genres",
+        prefix + "/genre/{genre}?page=",
         "----------------------",
-        prefix + "/movies/{page}",
-        prefix + "/movies/info/{slug}",
-        prefix + "/movies/sources/{slug}",
-        "----------------------",
-        prefix + "/series/{page}",
-        prefix + "/series/info/{slug}",
-        prefix + "/episode/sources/{slug}",
+        prefix + "/info/{id}",
+        prefix + "/watch/{episodeId}",
+        prefix + "/servers/{episodeId}",
         "----------------------",
         prefix + "/m3u8-proxy?url={url}&headers={encodedHeaders}",
         prefix + "/ts-segment?url={url}&headers={encodedHeaders}",
         prefix + "/fetch?url={url}&headers={encodedHeaders}",
         prefix + "/mp4-proxy?url={url}&headers=",
       ],
-      msg: "use these proxy routes for some toonstream source to work.",
+      msg: "ids are movie$<slug> / series$<slug>; episode ids append $ep=<season>x<episode>. Same node output as /anime/animekai.",
     };
   })
-  .get("/home", async () => {
-    const then = performance.now();
-    // serve cache if has
-    const cachedHomeData = await Cache.get("home");
-    if (cachedHomeData)
-      return {
-        success: true,
-        served_cache: true,
-        took_ms: (performance.now() - then).toFixed(2),
-        data: JSON.parse(cachedHomeData),
-      };
 
-    const data = await ScrapeHomePage();
+  // ─── Search ────────────────────────────────────────────────────────────────
+  .get("/search/:query", async ({ params: { query }, query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `toonstream:search:${query}:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
 
-    if (data?.lastEpisodes || data?.main || data?.sidebar) {
-      Cache.set("home", JSON.stringify(data), HOME_CACHE_TTL); // dont await
+    const results = await Toonstream.search(query, page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 43200); // 12 hours
+    }
+    return results;
+  })
+
+  // ─── Search Suggestions ────────────────────────────────────────────────────
+  .get("/suggestions/:query", async ({ params: { query } }) => {
+    const key = `toonstream:suggestions:${query}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return { results: JSON.parse(cachedData) };
+
+    const results = await Toonstream.suggestions(query);
+    if (results && results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 43200); // 12 hours
+    }
+    return { results };
+  })
+
+  // ─── Spotlight ─────────────────────────────────────────────────────────────
+  .get("/spotlight", async () => {
+    const cachedData = await Cache.get("toonstream:spotlight");
+    if (cachedData) return { results: JSON.parse(cachedData) };
+
+    const results = await Toonstream.spotlight();
+    if (results && results.length > 0) {
+      Cache.set("toonstream:spotlight", JSON.stringify(results), 43200); // 12 hours
+    }
+    return { results };
+  })
+
+  // ─── Recent Episodes (latest episodes rail) ────────────────────────────────
+  .get("/recent-episodes", async () => {
+    const key = `toonstream:recent-episodes`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Toonstream.recentEpisodes();
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 60); // 1 minute for recent episodes
+    }
+    return results;
+  })
+
+  // ─── Movies ────────────────────────────────────────────────────────────────
+  .get("/movies", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `toonstream:movies:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Toonstream.movies(page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 86400 * 7); // 7 days
+    }
+    return results;
+  })
+
+  // ─── TV (series) ───────────────────────────────────────────────────────────
+  .get("/tv", async ({ query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `toonstream:tv:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Toonstream.tv(page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 86400 * 7);
+    }
+    return results;
+  })
+
+  // ─── Genre List ────────────────────────────────────────────────────────────
+  .get("/genres", async () => {
+    const key = `toonstream:genres`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return { results: JSON.parse(cachedData) };
+
+    const results = await Toonstream.genres();
+    if (results && results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 86400 * 30); // 30 days
+    }
+    return { results };
+  })
+
+  // ─── By Genre ──────────────────────────────────────────────────────────────
+  .get("/genre/:genre", async ({ params: { genre }, query: qs }) => {
+    const page = parseInt(qs?.page as string) || 1;
+    const key = `toonstream:genre:${genre}:${page}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
+
+    const results = await Toonstream.genreSearch(genre, page);
+    if (results && results.results && results.results.length > 0) {
+      Cache.set(key, JSON.stringify(results), 86400 * 3); // 3 days
+    }
+    return results;
+  })
+
+  // ─── Anime Info ────────────────────────────────────────────────────────────
+  .get("/info/:id?", async ({ params: { id }, set }) => {
+    if (!id) {
+      set.status = 400;
+      return { message: "id is required" };
     }
 
-    if (data)
-      return {
-        success: true,
-        took_ms: (performance.now() - then).toFixed(2),
-        data: data,
-        served_cache: false,
-      };
-    else
-      return {
-        success: false,
-        took_ms: (performance.now() - then).toFixed(2),
-        msg: "No Data Scraped!",
-      };
-  })
-
-  .get(
-    "/search/:query/:page?",
-    async ({ params: { query, page } }) => {
-      const then = performance.now();
-
-      const key = `search:${query}:${page || 1}`;
-      const cachedSearchData = await Cache.get(key);
-      if (cachedSearchData)
-        return {
-          success: true,
-          served_cache: true,
-          took_ms: (performance.now() - then).toFixed(2),
-          data: JSON.parse(cachedSearchData),
-        };
-
-      const data = await ScrapeSearch(query, +page);
-
-      if (data?.data) {
-        Cache.set(key, JSON.stringify(data), SEARCH_CACHE_TTL); // dont await
-      }
-
-      if (data)
-        return {
-          success: true,
-          served_cache: false,
-          took_ms: (performance.now() - then).toFixed(2),
-          data: data,
-        };
-      else
-        return {
-          success: false,
-          took_ms: (performance.now() - then).toFixed(2),
-          msg: "No Data Scraped!",
-        };
-    },
-    {
-      params: t.Object({
-        query: t.String(),
-        page: t.Optional(t.Number({ default: 1 })),
-      }),
-    },
-  )
-
-  .get(
-    "/movies/:page?",
-    async ({ params: { page } }) => {
-      const then = performance.now();
-      const key = `movies:${page || 1}`;
-      const cachedMoviesData = await Cache.get(key);
-
-      if (cachedMoviesData)
-        return {
-          success: true,
-          served_cache: true,
-          page: page || 1,
-          took_ms: (performance.now() - then).toFixed(2),
-          data: JSON.parse(cachedMoviesData),
-        };
-
-      const data = await ScrapeMovies(+page);
-
-      if (data?.data) {
-        Cache.set(key, JSON.stringify(data), MOVIES_PAGE_CACHE_TTL); // dont await
-      }
-
-      if (data) {
-        return {
-          success: true,
-          served_cache: false,
-          took_ms: (performance.now() - then).toFixed(2),
-          page: page || 1,
-          data: data,
-        };
-      } else
-        return {
-          success: false,
-          took_ms: (performance.now() - then).toFixed(2),
-          page: page || 1,
-          msg: "No Data Scraped!",
-        };
-    },
-    {
-      params: t.Object({
-        page: t.Optional(t.Number({ default: 1 })),
-      }),
-    },
-  )
-  .get("/movies/info/:slug", async ({ params: { slug } }) => {
-    const then = performance.now();
-    const key = `movie:info:${slug}`;
-    const cachedMovieData = await Cache.get(key);
-
-    if (cachedMovieData)
-      return {
-        success: true,
-        served_cache: true,
-        took_ms: (performance.now() - then).toFixed(2),
-        data: JSON.parse(cachedMovieData),
-      };
-
-    const data = await ScrapeMovieInfo(slug);
-
-    if (data) {
-      Cache.set(key, JSON.stringify(data), MOVIE_INFO_CACHE_TTL); // dont await
-
-      return {
-        success: true,
-        served_cache: false,
-        took_ms: (performance.now() - then).toFixed(2),
-        data: data,
-      };
-    } else
-      return {
-        success: false,
-        took_ms: (performance.now() - then).toFixed(2),
-        msg: "No Data Scraped!",
-      };
-  })
-  .get("/movies/sources/:slug", async ({ params: { slug } }) => {
-    const then = performance.now();
-
-    const data = await ScrapeMovieSources(slug);
-
-    if (data)
-      return {
-        success: true,
-        took_ms: (performance.now() - then).toFixed(2),
-        data: data,
-      };
-    else
-      return {
-        success: false,
-        took_ms: (performance.now() - then).toFixed(2),
-        msg: "No Data Scraped!",
-      };
-  })
-
-  .get(
-    "/series/:page?",
-    async ({ params: { page } }) => {
-      const then = performance.now();
-      const key = `series:${page}`;
-
-      const cachedData = await Cache.get(key);
-
-      if (cachedData)
-        return {
-          success: true,
-          served_cache: true,
-          page: page || 1,
-          took_ms: (performance.now() - then).toFixed(2),
-          data: JSON.parse(cachedData),
-        };
-
-      const data = await ScrapeSeries(+page);
-
-      if (data?.data) {
-        Cache.set(key, JSON.stringify(data), SERIES_PAGE_CACHE_TTL); // dont await
-      }
-
-      if (data) {
-        return {
-          success: true,
-          served_cache: false,
-          took_ms: (performance.now() - then).toFixed(2),
-          page: page || 1,
-          data: data,
-        };
-      } else
-        return {
-          success: false,
-          took_ms: (performance.now() - then).toFixed(2),
-          page: page || 1,
-          msg: "No Data Scraped!",
-        };
-    },
-    {
-      params: t.Object({
-        page: t.Optional(t.Number({ default: 1 })),
-      }),
-    },
-  )
-  .get("/series/info/:slug", async ({ params: { slug } }) => {
-    const then = performance.now();
-    const key = `series:info:${slug}`;
-
+    const key = `toonstream:info:${id}`;
     const cachedData = await Cache.get(key);
+    if (cachedData) return JSON.parse(cachedData);
 
-    if (cachedData)
-      return {
-        success: true,
-        served_cache: true,
-        took_ms: (performance.now() - then).toFixed(2),
-        data: JSON.parse(cachedData),
-      };
+    const res = await Toonstream.info(id);
+    if (!res) {
+      set.status = 404;
+      return { message: "Anime not found" };
+    }
 
-    const data = await ScrapeSeriesInfo(slug);
-
-    if (data) {
-      Cache.set(key, JSON.stringify(data), SERIES_INFO_CACHE_TTL); // dont await
-
-      return {
-        success: true,
-        served_cache: false,
-        took_ms: (performance.now() - then).toFixed(2),
-        data: data,
-      };
-    } else
-      return {
-        success: false,
-        took_ms: (performance.now() - then).toFixed(2),
-        msg: "No Data Scraped!",
-      };
+    Cache.set(key, JSON.stringify(res), 86400 * 3); // 3 days for info
+    return res;
   })
-  .get("/episode/sources/:slug", async ({ params: { slug }, request }) => {
-    const data = await ScrapeEpisodeSources(slug, request);
-    if (data)
-      return {
-        success: true,
-        data: data,
-      };
-    else
-      return {
-        success: false,
-        msg: "No Data Scraped!",
-      };
+
+  // ─── Watch / Stream Sources ────────────────────────────────────────────────
+  .get("/watch/:episodeId", async ({ params: { episodeId }, query: qs, set }) => {
+    if (!episodeId) {
+      set.status = 400;
+      return { message: "episodeId is required" };
+    }
+
+    const type = qs?.type as "softsub" | "dub" | "hardsub" | undefined;
+
+    // Every server is multi-audio, so all types resolve to the same list; only
+    // the isDub flag reflects the request. Vidmoly's signed m3u8 goes stale
+    // (e=43200), keep the TTL modest.
+    const key = `toonstream:v1:watch:${episodeId}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return { isDub: type === "dub", ...JSON.parse(cachedData) };
+
+    const res = await Toonstream.streams(episodeId, type);
+    if (res?.results?.length > 0) {
+      Cache.set(key, JSON.stringify({ results: res.results }), 1800);
+    }
+    return res;
   })
+
+  // ─── Episode Servers ───────────────────────────────────────────────────────
+  .get("/servers/:episodeId", async ({ params: { episodeId }, query: qs, set }) => {
+    if (!episodeId) {
+      set.status = 400;
+      return { message: "episodeId is required" };
+    }
+
+    const type = qs?.type as "softsub" | "dub" | "hardsub" | undefined;
+
+    const key = `toonstream:v1:servers:${episodeId}:${type ?? "hardsub"}`;
+    const cachedData = await Cache.get(key);
+    if (cachedData) return { servers: JSON.parse(cachedData) };
+
+    const servers = await Toonstream.servers(episodeId, type);
+    if (servers.length > 0) Cache.set(key, JSON.stringify(servers), 1800);
+    return { servers };
+  })
+
+  // ─── Media Proxies ─────────────────────────────────────────────────────────
 
   .get(
     "/m3u8-proxy",

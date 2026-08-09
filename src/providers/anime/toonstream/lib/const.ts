@@ -1,4 +1,11 @@
+import { env } from "../../../../core/runtime.js";
+
 export { toonstream as TOONSTREAM_BASE } from "../../../origins.js";
+
+// When set, every direct source is additionally wrapped through the proxy
+// routes (sources that *require* proxying carry `proxiedUrl` regardless).
+export const PROXIFY = Boolean(env.PROXIFY) || false;
+
 export const UserAgent =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36";
 

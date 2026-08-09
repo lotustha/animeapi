@@ -1,5 +1,5 @@
-import { ScrapeMovieSources } from "./scrapers/movie.js";
-import { ScrapeEpisodeSources } from "./scrapers/series.js";
+import { DirectSource } from "./lib/types.js";
+import { getEpisodeEmbeds, getMovieEmbeds, resolveDirectSource } from "./scrapers/source.js";
 
 // Global player data
 let playerUrl: string | null = null;
@@ -10,10 +10,17 @@ let subtitle: {
   url: string;
 } | null = null;
 
-export async function moviePlayer(slug: string) {
-  const res = await ScrapeMovieSources(slug);
+async function directSourcesOf(embeds: string[]): Promise<DirectSource[]> {
+  const out: DirectSource[] = [];
+  for (const embed of embeds) {
+    const src = await resolveDirectSource(embed);
+    if (src) out.push(src);
+  }
+  return out;
+}
 
-  const sources = res?.sources || [];
+export async function moviePlayer(slug: string) {
+  const sources = await directSourcesOf(await getMovieEmbeds(slug));
 
   const proxy1 = sources[0]?.proxiedUrl || null;
   const proxy2 = sources[1]?.proxiedUrl || null;
@@ -44,9 +51,14 @@ export async function moviePlayer(slug: string) {
 }
 
 export async function episodePlayer(slug: string, req: Request) {
-  const res = await ScrapeEpisodeSources(slug, req);
+  // Episode slugs are "<series-slug>-<season>x<episode>"; accept a bare series
+  // slug plus ?season=&episode= query params like the old sources route did.
+  const urlObj = new URL(req.url);
+  const season = urlObj.searchParams.get("season");
+  const episode = urlObj.searchParams.get("episode");
+  const epSlug = /-\d+x\d+$/.test(slug) ? slug : `${slug}-${season ?? 1}x${episode ?? 1}`;
 
-  const sources = res?.sources || [];
+  const sources = await directSourcesOf(await getEpisodeEmbeds(epSlug));
 
   const proxy1 = sources[0]?.proxiedUrl || null;
   const proxy2 = sources[1]?.proxiedUrl || null;

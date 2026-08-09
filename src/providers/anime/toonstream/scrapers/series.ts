@@ -1,9 +1,7 @@
 import * as cheerio from "cheerio";
-import { Cache } from "../lib/cache.js";
-import { EPISODE_IFRAMES_TTL, TOONSTREAM_BASE, UserAgent } from "../lib/const.js";
+import { TOONSTREAM_BASE, UserAgent } from "../lib/const.js";
 import { absolute, parseCard, parsePagination, slugOf } from "../lib/parse.js";
 import { AnimeCard, Cast, Episode, Genre, Season, Tag } from "../lib/types.js";
-import { getDirectSources, getPlayerIframeUrls } from "./source.js";
 
 export async function ScrapeSeries(page: number = 1) {
   const url = TOONSTREAM_BASE + "/series" + (page === 1 ? "" : `/page/${page}`);
@@ -32,8 +30,21 @@ export function parseDetail($: cheerio.CheerioAPI) {
   const title = article.find(".entry-title").first().text().trim();
   if (!title) return null;
 
+  const image =
+    $('meta[property="og:image"]').attr("content") ??
+    article.find(".post-thumbnail img, figure img").first().attr("src") ??
+    "";
+
   const year = article.find(".year").first().text().trim();
-  const description = article.find(".description p").first().text().trim();
+
+  // The description block mixes the synopsis with a "Language: …" paragraph
+  // (sometimes first) — take the longest non-language paragraph.
+  let description = "";
+  article.find(".description p").each((_, el) => {
+    const text = $(el).text().trim();
+    if (/^language\s*:/i.test(text)) return;
+    if (text.length > description.length) description = text;
+  });
   const tmdbRating = Number(article.find(".vote .num").first().text().trim()) || 0;
 
   const genres: Genre[] = [];
@@ -62,7 +73,7 @@ export function parseDetail($: cheerio.CheerioAPI) {
     casts.push({ name, url: absolute(href) });
   });
 
-  return { title, year, description, tmdbRating, genres, tags, casts };
+  return { title, image, year, description, tmdbRating, genres, tags, casts };
 }
 
 export async function ScrapeSeriesInfo(slug: string) {
@@ -147,55 +158,4 @@ async function fetchSeasonEpisodes(seasonUrl: string, referer: string): Promise<
     console.log("ERROR fetching season", seasonUrl, err);
   }
   return episodes;
-}
-
-export async function ScrapeEpisodeSources(slug: string, req: Request) {
-  const urlObj = new URL(req.url);
-  const season = urlObj.searchParams.get("season");
-  const episode = urlObj.searchParams.get("episode");
-
-  // Episode slugs are "<series-slug>-<season>x<episode>". Accept a slug that
-  // already carries the suffix so callers can pass what /series/info returned.
-  const hasSuffix = /-\d+x\d+$/.test(slug);
-  const epSlug = hasSuffix ? slug : `${slug}-${season ?? 1}x${episode ?? 1}`;
-  const url = `${TOONSTREAM_BASE}/episode/${epSlug}/`;
-
-  const key = `episode:iframes:${epSlug}`;
-  const cachedIframes = await Cache.get(key, true);
-
-  if (cachedIframes) {
-    const directSources = await getDirectSources(cachedIframes);
-    return {
-      hash: hashOf(cachedIframes),
-      embeds: cachedIframes,
-      sources: directSources,
-    };
-  }
-
-  try {
-    const res = await fetch(url, { headers: { "User-Agent": UserAgent } });
-    if (!res.ok) throw new Error("Failed to fetch " + url);
-
-    const html = await res.text();
-    const playerIframeUrls = await getPlayerIframeUrls(html, url);
-    if (playerIframeUrls.length > 0) {
-      Cache.set(key, true, playerIframeUrls, EPISODE_IFRAMES_TTL);
-    }
-
-    const directSources = await getDirectSources(playerIframeUrls);
-
-    return {
-      hash: hashOf(playerIframeUrls),
-      embeds: playerIframeUrls,
-      sources: directSources,
-    };
-  } catch (err) {
-    console.log("ERROR", err);
-  }
-}
-
-/** as-cdn player id, kept for clients that relied on this field. */
-function hashOf(urls: string[]): string | null {
-  const target = urls.find((u) => u.includes("as-cdn21.top/video/"));
-  return target?.match(/\/video\/([^/?#]+)/)?.[1] ?? null;
 }

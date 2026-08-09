@@ -2,10 +2,14 @@ import * as cheerio from "cheerio";
 import { Cache } from "../lib/cache.js";
 import {
   ASCDN_SOURCE_TTL,
-  embedPlayerOrigins,
+  EPISODE_IFRAMES_TTL,
+  MOVIE_IFRAMES_TTL,
+  PROXIFY,
   RUBYSTREAM_SOURCE_TTL,
+  TOONSTREAM_BASE,
   UserAgent,
   VIDMOLY_SOURCE_TTL,
+  embedPlayerOrigins,
 } from "../lib/const.js";
 import { absolute } from "../lib/parse.js";
 import { proxifySource } from "../lib/proxy.js";
@@ -13,7 +17,6 @@ import { DirectSource } from "../lib/types.js";
 import { getAsCdnSource } from "./embed/as-cdn.js";
 import { getRubystmSource } from "./embed/rubystm.js";
 import { getVidmolyDirectSource, isVidmolyUrl } from "./embed/vidmoly.js";
-import { PROXIFY } from "../route.js";
 
 /**
  * Pulls the player list off a watch page.
@@ -69,67 +72,76 @@ export async function getPlayerIframeUrls(pageHtml: string, pageUrl: string): Pr
   return out;
 }
 
+async function getPageEmbeds(pageUrl: string, cacheKey: string, ttl: number): Promise<string[]> {
+  const cached = await Cache.get(cacheKey, true);
+  if (cached) return cached;
+
+  try {
+    const res = await fetch(pageUrl, { headers: { "User-Agent": UserAgent } });
+    if (!res.ok) throw new Error("Failed to fetch " + pageUrl);
+
+    const urls = await getPlayerIframeUrls(await res.text(), pageUrl);
+    if (urls.length > 0) Cache.set(cacheKey, true, urls, ttl);
+    return urls;
+  } catch (err) {
+    console.log("ERROR", err);
+    return [];
+  }
+}
+
+/** Episode slugs are "<series-slug>-<season>x<episode>". */
+export async function getEpisodeEmbeds(epSlug: string): Promise<string[]> {
+  return getPageEmbeds(
+    `${TOONSTREAM_BASE}/episode/${epSlug}/`,
+    `episode:iframes:${epSlug}`,
+    EPISODE_IFRAMES_TTL,
+  );
+}
+
+export async function getMovieEmbeds(slug: string): Promise<string[]> {
+  return getPageEmbeds(
+    `${TOONSTREAM_BASE}/movies/${slug}`,
+    `movie:iframes:${slug}`,
+    MOVIE_IFRAMES_TTL,
+  );
+}
+
 const { asCdnOrigin, rubyStreamOrigin } = embedPlayerOrigins;
 
-// Only these two reduce to a direct stream. The rest (gdmirrorbot, cloudy.upns,
-// abyssplayer, blakiteapi, emturbovid) are returned as embeds for the client to
-// iframe — they hide their sources behind obfuscated/encrypted players.
-export async function getDirectSources(playerIframeUrls: string[]) {
-  const directSources: DirectSource[] = [];
+// Only these three reduce to a direct stream. The rest (gdmirrorbot,
+// cloudy.upns, abyssplayer, blakiteapi, emturbovid) stay embeds for the client
+// to iframe — they hide their sources behind obfuscated/encrypted players.
+export async function resolveDirectSource(url: string): Promise<DirectSource | null> {
+  let scrape: (() => Promise<DirectSource | null | undefined>) | null = null;
+  let ttl = 0;
 
-  for (const url of playerIframeUrls) {
-    try {
-      if (url.startsWith(asCdnOrigin)) {
-        const key = `source:${url}`;
-        const cachedSource = await Cache.get(key, true);
-
-        if (cachedSource) {
-          directSources.push(cachedSource);
-        } else {
-          const src = await getAsCdnSource(url);
-          if (src) {
-            Cache.set(key, true, src, ASCDN_SOURCE_TTL);
-            directSources.push(src);
-          }
-        }
-      } else if (url.startsWith(rubyStreamOrigin)) {
-        const key = `source:${url}`;
-        const cachedSource = await Cache.get(key, true);
-
-        if (cachedSource) {
-          directSources.push(cachedSource);
-        } else {
-          const src = await getRubystmSource(url);
-          if (src) {
-            Cache.set(key, true, src, RUBYSTREAM_SOURCE_TTL);
-            directSources.push(src);
-          }
-        }
-      } else if (isVidmolyUrl(url)) {
-        const key = `source:${url}`;
-        const cachedSource = await Cache.get(key, true);
-
-        if (cachedSource) {
-          directSources.push(cachedSource);
-        } else {
-          const src = await getVidmolyDirectSource(url);
-          if (src) {
-            // Short TTL: the signed m3u8 carries e=43200 (12h) and goes stale.
-            Cache.set(key, true, src, VIDMOLY_SOURCE_TTL);
-            directSources.push(src);
-          }
-        }
-      } else console.log("No source-scraper found for", url, "- skipping");
-    } catch (err) {
-      console.log("Error:", err);
-    }
+  if (url.startsWith(asCdnOrigin)) {
+    scrape = () => getAsCdnSource(url);
+    ttl = ASCDN_SOURCE_TTL;
+  } else if (url.startsWith(rubyStreamOrigin)) {
+    scrape = () => getRubystmSource(url);
+    ttl = RUBYSTREAM_SOURCE_TTL;
+  } else if (isVidmolyUrl(url)) {
+    // Short TTL: the signed m3u8 carries e=43200 (12h) and goes stale.
+    scrape = () => getVidmolyDirectSource(url);
+    ttl = VIDMOLY_SOURCE_TTL;
   }
 
-  console.log(`Successfully Scraped ${directSources.length} direct source(s)`);
+  if (!scrape) return null;
 
-  if (PROXIFY) {
-    return directSources.map((src) => proxifySource(src));
-  } else {
-    return directSources;
+  try {
+    const key = `source:${url}`;
+    let src: DirectSource | null = await Cache.get(key, true);
+
+    if (!src) {
+      src = (await scrape()) ?? null;
+      if (src) Cache.set(key, true, src, ttl);
+    }
+
+    if (!src) return null;
+    return PROXIFY ? proxifySource(src) : src;
+  } catch (err) {
+    console.log("Error:", err);
+    return null;
   }
 }

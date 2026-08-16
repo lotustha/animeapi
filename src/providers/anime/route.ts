@@ -1,4 +1,11 @@
 import { Elysia } from "elysia";
+import {
+  DMCA_BLOCKED_RESPONSE,
+  deepFilterBlocked,
+  isBlockedId,
+  isBlockedRecord,
+  isPlainObject,
+} from "../../core/blocklist.js";
 import { animekaiRoutes } from "./animekai/route.js";
 import { animepaheRoutes } from "./animepahe/route.js";
 import { toonstreamRoutes } from "./toonstream/route.js";
@@ -12,7 +19,31 @@ import { anikotoRoutes } from "./anikoto/route.js";
 import { animelokRoutes } from "./animelok/route.js";
 import { aniwavesRoutes } from "./aniwaves/route.js";
 
+const BLOCKABLE_PARAM_RE = /^(id|slug|anime.?id|episode.?id)$/i;
+
 export const animeRoutes = new Elysia({ prefix: "/anime" })
+  // ─── DMCA takedown guard (src/core/blocklist.ts) ─────────────────────────────
+  // Registered before the provider plugins so it intercepts every /anime route:
+  // direct requests for blocked ids are refused, and blocked titles are stripped
+  // from every JSON response — including responses served from cache.
+  .onBeforeHandle(({ params, set }) => {
+    for (const [key, value] of Object.entries((params ?? {}) as Record<string, unknown>)) {
+      if (BLOCKABLE_PARAM_RE.test(key) && typeof value === "string" && isBlockedId(value)) {
+        set.status = 451;
+        return DMCA_BLOCKED_RESPONSE;
+      }
+    }
+  })
+  .onAfterHandle(({ response, set }) => {
+    if (Array.isArray(response)) return deepFilterBlocked(response);
+    if (isPlainObject(response)) {
+      if (isBlockedRecord(response)) {
+        set.status = 451;
+        return DMCA_BLOCKED_RESPONSE;
+      }
+      return deepFilterBlocked(response);
+    }
+  })
   .use(animepaheRoutes)
   .use(animekaiRoutes)
   .use(toonstreamRoutes)

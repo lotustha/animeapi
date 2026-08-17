@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { getFillerEpisodes, resolveMalId } from "../../../core/fillers.js";
 import { Logger } from "../../../core/logger.js";
 import { animekai as animekaiOrigin } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
@@ -355,7 +356,7 @@ export class AnimeKai {
         japaneseTitle: $(".entity-scroll > .title").attr("data-jp")?.trim(),
         image: $("div.poster > div > img").attr("src"),
         description: $(".entity-scroll > .desc").text().trim(),
-        type: $(".entity-scroll > .info").children().last().text().toUpperCase(),
+        type: $(".entity-scroll > .info").children().last().text().trim().toUpperCase(),
         url: `${this.baseUrl}/watch/${animeSlug}`,
       };
 
@@ -494,6 +495,21 @@ export class AnimeKai {
       });
       info.episodes.sort((a: AnimeKaiEpisode, b: AnimeKaiEpisode) => a.number - b.number);
       info.totalEpisodes = info.episodes.length;
+
+      // The page has no filler markers and no MAL/AniList links anymore, so
+      // isFiller from hasClass("filler") above is always false. Resolve the
+      // MAL id by exact title match and overlay Jikan's filler list; if the
+      // title doesn't resolve, episodes just keep isFiller: false as before.
+      if (!info.malId) {
+        const resolved = await resolveMalId(info.title, info.japaneseTitle);
+        if (resolved) info.malId = String(resolved);
+      }
+      if (info.malId) {
+        const fillers = await getFillerEpisodes(info.malId);
+        for (const ep of info.episodes as AnimeKaiEpisode[]) {
+          if (fillers.has(ep.number)) ep.isFiller = true;
+        }
+      }
 
       return info;
     } catch (err) {

@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { SERVER_ORIGIN } from "../../../core/config.js";
+import { getFillerEpisodes } from "../../../core/fillers.js";
 import { Logger } from "../../../core/logger.js";
 import { proxifyFetch, proxifySource } from "../../../core/proxy.js";
 import { anizen as anizenOrigin, anizen_api as anizenApi } from "../../origins.js";
@@ -396,13 +397,17 @@ export class Anizen {
     const dub = this.toInt(tv.dub);
 
     const episodesArr = Array.isArray(data.episodes?.episodes) ? data.episodes.episodes : [];
+    // Upstream's per-episode `filler` is false for every episode of every
+    // show, but each episode carries the show's MAL id — use it to pull the
+    // real filler list from Jikan and OR it over the (broken) upstream flag.
+    const fillers = await getFillerEpisodes(episodesArr.find((e: any) => e.malId)?.malId);
     const episodes: AnizenEpisode[] = episodesArr.map((ep: any): AnizenEpisode => {
       const num = this.toInt(ep.episode_no);
       return {
         id: `${data.id}$ep=${num}$token=${ep.id ?? ""}`,
         number: num,
         title: ep.title ?? `Episode ${num}`,
-        isFiller: !!ep.filler,
+        isFiller: !!ep.filler || fillers.has(num),
         isSubbed: !!ep.hasSub,
         isDubbed: !!ep.hasDub,
         url: `${this.site}/watch/${data.id}?ep=${num}`,

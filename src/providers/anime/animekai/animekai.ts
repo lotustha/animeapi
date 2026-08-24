@@ -496,6 +496,29 @@ export class AnimeKai {
       info.episodes.sort((a: AnimeKaiEpisode, b: AnimeKaiEpisode) => a.number - b.number);
       info.totalEpisodes = info.episodes.length;
 
+      // Unknown slug → not found, rather than an empty shell with the id echoed
+      // back.
+      //
+      // /watch/<slug> ALWAYS redirects: a real title goes to .../ep-1, an
+      // unknown one to .../ep-0, and both land on a 200. So `res.ok` and a
+      // non-empty body prove nothing — the ep-0 page is a 26 KB stub with no
+      // title and no episode list, and every selector above quietly yields "".
+      // The object was still returned, so callers got a 200 describing an anime
+      // that does not exist here, and route.ts cached that for three days.
+      //
+      // Consumers that fail over between providers (a saved id belongs to
+      // exactly one of them) read that 200 as "animekai has it" unless they
+      // separately sniff for hollowness. A 404 is the honest answer and lets
+      // them move on immediately.
+      //
+      // Both conditions, not just the title: a markup change that breaks the
+      // title selector alone must not start 404-ing titles we really do have.
+      // A page with 500 episodes is a real page whatever the heading says.
+      if (!info.title && info.episodes.length === 0) {
+        Logger.info(`AnimeKai info: no such title "${animeSlug}"`);
+        return null;
+      }
+
       // The page has no filler markers and no MAL/AniList links anymore, so
       // isFiller from hasClass("filler") above is always false. Resolve the
       // MAL id by exact title match and overlay Jikan's filler list; if the

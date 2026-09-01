@@ -2,6 +2,7 @@ import { Elysia, t } from "elysia";
 import { SERVER_ORIGIN } from "./config.js";
 import { isTooLarge } from "./helper.js";
 import { Logger } from "./logger.js";
+import { isPlaylist, proxifyPlaylist } from "./playlist.js";
 
 // for proxy safety
 const MAX_M3U8_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -9,7 +10,15 @@ const MAX_TS_SIZE = 50 * 1024 * 1024; // 50 MB
 const MAX_FETCH_SIZE = 50 * 1024 * 1024; // 50 MB
 const MAX_MP4_SIZE = 20 * 1024 * 1024 * 1024; // 20 GB
 
-const PLAYLIST_REGEX = /\.m3u|playlist|\.txt/i;
+// Segment CDNs rotate fake extensions (.jpg .html .js .css .txt ...) and lie in
+// Content-Type accordingly (text/css, image/png, text/plain). Players that sniff
+// MIME reject those, so the segment route only trusts an upstream type that is
+// already a media type and otherwise labels the body by its first bytes.
+const segmentContentType = (upstream: string | null, firstByte: number | undefined) => {
+  const t = (upstream || "").toLowerCase();
+  if (t.startsWith("video/") || t.startsWith("audio/")) return upstream as string;
+  return firstByte === 0x47 ? "video/MP2T" : "application/octet-stream";
+};
 
 import { env } from "./runtime.js";
 
@@ -126,45 +135,31 @@ export const proxyRoutes = new Elysia({ prefix: "/proxy" })
           return new Response("File too large", { status: 413 });
         }
 
-        const text = await res.text();
-        const encodedHeaders = encodeURIComponent(headers || "");
+        const bytes = new Uint8Array(await res.arrayBuffer());
 
-        const proxifiedM3u8 = text
-          .split("\n")
-          .map((line) => {
-            const tl = line.trim();
-            if (!tl) return line;
+        // Never rewrite something that is not a playlist. If a segment lands
+        // here (a stale link, a CDN that serves TS under a .m3u8 name) it is
+        // passed through as bytes — the previous code decoded it as UTF-8 and
+        // emitted 3–9 MB of percent-encoded U+FFFD as "playlist lines".
+        if (!isPlaylist(bytes)) {
+          return new Response(bytes, {
+            headers: {
+              "Content-Type": segmentContentType(res.headers.get("Content-Type"), bytes[0]),
+              "Cache-Control": "public, max-age=86400",
+            },
+          });
+        }
 
-            if (tl.startsWith("#EXT")) {
-              return tl.replace(/URI="([^"]+)"/g, (_, uri) => {
-                const absoluteUrl = new URL(uri, url).href;
-                let proxiedUrl;
-                const encodedUrl = encodeURIComponent(absoluteUrl);
-
-                if (PLAYLIST_REGEX.test(absoluteUrl)) {
-                  proxiedUrl = `${SERVER_ORIGIN}/proxy/m3u8-proxy?url=${encodedUrl}${headers ? `&headers=${encodedHeaders}` : ""}`;
-                } else {
-                  proxiedUrl = `${SERVER_ORIGIN}/proxy/fetch?url=${encodedUrl}${headers ? `&headers=${encodedHeaders}` : ""}`;
-                }
-
-                return `URI="${proxiedUrl}"`;
-              });
-            }
-
-            const absoluteUrl = new URL(tl, url).href;
-            const encodedUrl = encodeURIComponent(absoluteUrl);
-
-            if (PLAYLIST_REGEX.test(absoluteUrl)) {
-              return `${SERVER_ORIGIN}/proxy/m3u8-proxy?url=${encodedUrl}${headers ? `&headers=${encodedHeaders}` : ""}`;
-            } else {
-              return `${SERVER_ORIGIN}/proxy/ts-segment?url=${encodedUrl}${headers ? `&headers=${encodedHeaders}` : ""}`;
-            }
-          })
-          .join("\n");
+        const proxifiedM3u8 = proxifyPlaylist(new TextDecoder().decode(bytes), {
+          url,
+          origin: SERVER_ORIGIN as string,
+          headers: headers || undefined,
+        });
 
         return new Response(proxifiedM3u8, {
           headers: {
-            "Content-Type": res.headers.get("Content-Type") || "application/vnd.apple.mpegurl",
+            "Content-Type": "application/vnd.apple.mpegurl",
+            "Cache-Control": "no-store",
           },
         });
       } catch (err: any) {
@@ -217,9 +212,34 @@ export const proxyRoutes = new Elysia({ prefix: "/proxy" })
           return new Response("Segment too large", { status: 413 });
         }
 
-        return new Response(res.body, {
+        // Peek at the first byte (for the Content-Type decision) without
+        // buffering the whole segment: read one chunk, then stream the rest.
+        const body = res.body;
+        let firstByte: number | undefined;
+        let stream: ReadableStream<Uint8Array> | null = body;
+        if (body) {
+          const reader = body.getReader();
+          const first = await reader.read();
+          firstByte = first.value?.[0];
+          stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              if (first.value) controller.enqueue(first.value);
+              if (first.done) controller.close();
+            },
+            async pull(controller) {
+              const { value, done } = await reader.read();
+              if (done) controller.close();
+              else controller.enqueue(value);
+            },
+            cancel(reason) {
+              return reader.cancel(reason);
+            },
+          });
+        }
+
+        return new Response(stream, {
           headers: {
-            "Content-Type": res.headers.get("Content-Type") || "video/MP2T",
+            "Content-Type": segmentContentType(res.headers.get("Content-Type"), firstByte),
             "Cache-Control": "public, max-age=86400",
           },
         });

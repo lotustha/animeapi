@@ -46,6 +46,16 @@ export class Anikoto {
     };
   }
 
+  // megaplay.buzz refuses to serve its player to a request with no Referer — it
+  // answers HTTP 200 whose body is an error page, so status-code checks pass
+  // while the client shows "Error - MegaPlay". Any non-empty Referer satisfies
+  // it. A browser <iframe> sends one automatically; an Android WebView loading
+  // the embed URL directly does not, so it has to be surfaced on every iframe
+  // source for the client to inject. Same fix as the anizen provider.
+  private static embedHeaders(): Record<string, string> {
+    return { Referer: `${this.baseUrl}/` };
+  }
+
   private static toInt(text: string | number | undefined | null): number {
     if (typeof text === "number") return Number.isFinite(text) ? Math.trunc(text) : 0;
     if (!text) return 0;
@@ -830,6 +840,7 @@ export class Anikoto {
               sources: [{ file: playerUrl, type: "iframe" }],
               subtitles: [],
               download: null,
+              headers: this.embedHeaders(),
             });
           }
         } else {
@@ -839,6 +850,7 @@ export class Anikoto {
             sources: [{ file: src.url, type: isAlreadyHls ? "hls" : "iframe" }],
             subtitles: [],
             download: null,
+            ...(isAlreadyHls ? {} : { headers: this.embedHeaders() }),
           });
         }
 

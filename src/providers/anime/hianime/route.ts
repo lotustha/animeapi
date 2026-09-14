@@ -1,6 +1,7 @@
 import { Elysia } from "elysia";
 import { Cache } from "../../../core/cache.js";
 import { HiAnime } from "./hianime.js";
+import type { HiAnimeTypeParam } from "./types.js";
 
 const intParam = (v: unknown, fallback = 1): number => {
   const n = parseInt(String(v ?? ""), 10);
@@ -183,7 +184,7 @@ export const hianimeRoutes = new Elysia({ prefix: "/hianime" })
       set.status = 400;
       return { message: "episodeId is required" };
     }
-    const type = qs?.type as "softsub" | "dub" | "hardsub" | undefined;
+    const type = qs?.type as HiAnimeTypeParam | undefined;
     const animeSlug = episodeId.split("$")[0] ?? episodeId;
     return await HiAnime.streams(animeSlug, episodeId, type);
   })
@@ -194,6 +195,6 @@ export const hianimeRoutes = new Elysia({ prefix: "/hianime" })
       set.status = 400;
       return { message: "episodeId is required" };
     }
-    const type = qs?.type as "softsub" | "dub" | "hardsub" | undefined;
-    return { servers: await HiAnime.fetchEpisodeServers(episodeId, type ?? "hardsub") };
+    const type = qs?.type as HiAnimeTypeParam | undefined;
+    return { servers: await HiAnime.fetchEpisodeServers(episodeId, type ?? "sub") };
   });

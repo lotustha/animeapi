@@ -176,9 +176,9 @@ export const animeRoutes = new Elysia({ prefix: "/anime" })
           "GET /anime/hianime/specials?page=        → Specials",
           "GET /anime/hianime/genres                → Available genres",
           "GET /anime/hianime/genre/:genre?page=    → Browse by genre",
-          "GET /anime/hianime/info/:id              → Full title details + episodes (JSON API)",
-          "GET /anime/hianime/servers/:episodeId    → Episode servers (query: type=hardsub|softsub|dub)",
-          "GET /anime/hianime/watch/:episodeId      → Decrypted m3u8 sources + subtitles + intro/outro skip (query: type)",
+          "GET /anime/hianime/info/:id              → Full title details + episodes (id = slug, e.g. bleach-1369)",
+          "GET /anime/hianime/servers/:episodeId    → Episode embed servers (query: type=sub|dub)",
+          "GET /anime/hianime/watch/:episodeId      → m3u8 sources + subtitles + intro/outro skip (query: type=sub|dub)",
         ],
 
         anizen: [

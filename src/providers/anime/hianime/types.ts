@@ -1,5 +1,13 @@
+/** hianime.at exposes only sub and dub tiers; the old softsub tier is gone. */
+export type HiAnimeAudioType = "sub" | "dub";
+
+/** Accepted on the wire. "hardsub"/"softsub" are legacy aliases that map to "sub". */
+export type HiAnimeTypeParam = HiAnimeAudioType | "hardsub" | "softsub";
+
 export interface HiAnimeCard {
+  /** URL slug, e.g. "bleach-1369". Always ends in the numeric id. */
   id: string;
+  /** Numeric site id, e.g. "1369" — the key /api/theme endpoints use. */
   aniId: string | null;
   title: string;
   japaneseTitle: string | null;
@@ -46,13 +54,16 @@ export interface HiAnimeHome {
 }
 
 export interface HiAnimeEpisode {
+  /** Composite id accepted by /watch and /servers: `<slug>$ep=<episodeId>`. */
   id: string;
+  /** Bare numeric episode id, unrelated to the anime's own id. */
+  episodeId: string;
   number: number;
   title: string;
+  japaneseTitle: string | null;
   isFiller: boolean;
   isSubbed: boolean;
   isDubbed: boolean;
-  releaseDate: string | null;
   url: string;
 }
 
@@ -84,21 +95,20 @@ export interface HiAnimeInfo {
   subOrDub: "sub" | "dub" | "both";
   malId: string | null;
   anilistId: string | null;
-  refScore: number | null;
-  followedCount: string | null;
+  score: string | null;
   genres: string[];
   studios: string[];
   producers: string[];
-  countries: string[];
-  tags: string[];
   episodes: HiAnimeEpisode[];
   recommendations: HiAnimeCard[];
 }
 
 export interface HiAnimeServer {
   name: string;
+  /** Third-party embed URL, decoded from the site's base64 `data-hash`. */
   url: string;
+  type: string;
   isDub: boolean;
-  intro: { start: number; end: number };
-  outro: { start: number; end: number };
+  /** Headers the embed host requires; clients must replay these. */
+  headers: Record<string, string>;
 }

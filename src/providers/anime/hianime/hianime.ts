@@ -1,9 +1,12 @@
 import * as cheerio from "cheerio";
+import { getFillerEpisodes, resolveMalId } from "../../../core/fillers.js";
 import { Logger } from "../../../core/logger.js";
+import { proxifyFetch, proxifySource } from "../../../core/proxy.js";
 import { hianime as hianimeOrigin } from "../../origins.js";
-import { USER_AGENT } from "../animepahe/scraper/index.js";
-import { MegaUp } from "./scraper/megaup.js";
+import { USER_AGENT } from "../animepahe/scraper/utils.js";
+import { MegaPlay } from "./scraper/megaplay.js";
 import type {
+  HiAnimeAudioType,
   HiAnimeCard,
   HiAnimeEpisode,
   HiAnimeHome,
@@ -13,11 +16,20 @@ import type {
   HiAnimeSpotlight,
 } from "./types.js";
 
-// hianime.ws ships a JSON API at /api/v1/titles/{aniId} for metadata and
-// /api/v1/titles/{aniId}/episodes for the episode list. Server/source AJAX
-// still goes through /ajax/links/{list,view} with enc-kai tokens.
+// hianime.at is a Zoro-family site: server-rendered listing/detail pages plus a
+// small JSON-over-HTML API at /api/theme/ for episodes and servers. It hosts no
+// video and encrypts nothing of its own — every server is a base64 `data-hash`
+// that decodes to a third-party embed URL (see scraper/megaplay.ts).
+//
+// Two conventions matter throughout:
+//   * Every href in the markup is absolute (https://hianime.at/...), so slugs
+//     are derived by stripping the origin, never by trimming a leading "/".
+//   * A title's slug always ends in its numeric id ("bleach-1369" → 1369), and
+//     that same id is the `data-id` on the poster anchor. The episode-list API
+//     is keyed on it, so no extra lookup request is needed to resolve it.
 export class HiAnime {
   private static baseUrl = hianimeOrigin;
+  private static apiBase = `${hianimeOrigin}/api/theme`;
 
   private static headers(): Record<string, string> {
     return {
@@ -29,72 +41,100 @@ export class HiAnime {
     };
   }
 
+  private static ajaxHeaders(referer?: string): Record<string, string> {
+    return {
+      ...this.headers(),
+      Accept: "application/json, text/javascript, */*; q=0.01",
+      "X-Requested-With": "XMLHttpRequest",
+      ...(referer ? { Referer: referer } : {}),
+    };
+  }
+
   private static parseInt(text: string | undefined | null): number {
     if (!text) return 0;
-    const n = parseInt(String(text).trim(), 10);
+    const n = parseInt(String(text).trim().replace(/,/g, ""), 10);
     return Number.isFinite(n) ? n : 0;
   }
 
-  // ─── Card scraper for /home, /browser, /genres/*, /movie, /tv etc. ─────────
+  /** Absolute href → site-relative slug. Drops the origin, any /watch/ prefix and the query. */
+  private static toSlug(href: string | undefined | null): string {
+    if (!href) return "";
+    let path = href.trim();
+    try {
+      path = new URL(path, this.baseUrl).pathname;
+    } catch {
+      /* already a bare path */
+    }
+    return path
+      .replace(/^\/+/, "")
+      .replace(/^watch\//, "")
+      .replace(/\/+$/, "");
+  }
+
+  /** A slug always ends in the title's numeric id — the key the /api/theme endpoints use. */
+  private static aniIdFromSlug(slug: string): string | null {
+    return /-(\d+)$/.exec(slug)?.[1] ?? (/^\d+$/.test(slug) ? slug : null);
+  }
+
+  private static absolute(slugOrHref: string | undefined | null): string {
+    const slug = this.toSlug(slugOrHref);
+    return slug ? `${this.baseUrl}/${slug}` : this.baseUrl;
+  }
+
+  // ─── Card scraper for /home, /search, /genres/*, /movie, /tv etc. ──────────
 
   private static scrapeFlwCard($: cheerio.CheerioAPI, el: any): HiAnimeCard | null {
     const card = $(el);
-    const linkEl = card.find("a.film-poster-ahref").first();
-    const href =
-      linkEl.attr("href") ?? card.find(".film-name a, a.dynamic-name").first().attr("href") ?? "";
-    const id = href.replace(/^\/watch\//, "");
+    // The detail anchor (a.dynamic-name) points at /<slug>; the poster anchor
+    // points at /watch/<slug>?ep=latest. Prefer the detail one — the poster
+    // href carries a query that would otherwise end up inside the id.
+    const detailEl = card.find("a.dynamic-name, .film-name a").first();
+    const posterEl = card.find("a.film-poster-ahref").first();
+    const id = this.toSlug(detailEl.attr("href") ?? posterEl.attr("href"));
     if (!id) return null;
 
-    // The aniId can come from a.film-poster-ahref[data-tip] (search/category cards)
-    // or .film-poster[data-tip] (Most Viewed sidebar cards).
-    const aniId =
-      linkEl.attr("data-tip") ?? card.find(".film-poster").first().attr("data-tip") ?? null;
-
-    // The inner <a class="dynamic-name"> carries data-jp; the outer <h3 class="film-name"> does not.
-    const innerAnchor = card.find(".film-name a, a.dynamic-name").first();
-    const titleEl = innerAnchor.length ? innerAnchor : card.find(".film-name").first();
+    const img = card.find("img.film-poster-img").first();
     const tick = card.find(".film-poster .tick, .film-stats .tick, .fd-infor .tick").first();
     const fdInfo = card.find(".fd-infor .fdi-item, .film-stats .item");
 
     const sub = this.parseInt(tick.find(".tick-sub").text());
     const dub = this.parseInt(tick.find(".tick-dub").text());
-    const episodes = this.parseInt(tick.find(".tick-eps").text()) || Math.max(sub, dub);
 
     return {
       id,
-      aniId,
-      title: titleEl.text().trim(),
-      japaneseTitle: titleEl.attr("data-jp")?.trim() || null,
-      url: `${this.baseUrl}${href}`,
-      image: card.find("img.film-poster-img").attr("data-src")
-        || card.find("img.film-poster-img").attr("src")
-        || null,
+      // data-id on the poster anchor and the slug's trailing number agree;
+      // fall back to the slug so cards without the attribute still resolve.
+      aniId: posterEl.attr("data-id")?.trim() || this.aniIdFromSlug(id),
+      title: detailEl.text().trim() || card.find(".film-name").first().text().trim(),
+      japaneseTitle: detailEl.attr("data-jname")?.trim() || null,
+      url: this.absolute(id),
+      image: img.attr("src") || img.attr("data-src") || null,
       type: fdInfo.first().text().trim(),
       duration: fdInfo.eq(1).text().trim() || null,
       rating: tick.find(".tick-pg").text().trim() || null,
       quality: tick.find(".tick-quality").text().trim() || null,
       sub,
       dub,
-      episodes,
+      episodes: this.parseInt(tick.find(".tick-eps").text()) || Math.max(sub, dub),
     };
   }
 
-  // Trending uses a swiper of compact .item cards (number + title + poster link),
-  // not the standard .flw-item layout, so it gets a dedicated parser.
+  // Trending is a swiper of compact .item cards (number + title + poster link)
+  // rather than the standard .flw-item layout, so it gets its own parser.
   private static scrapeTrendingItem($: cheerio.CheerioAPI, el: any): HiAnimeCard | null {
     const card = $(el);
     const posterLink = card.find("a.film-poster").first();
-    const href = posterLink.attr("href") ?? "";
-    const id = href.replace(/^\/watch\//, "");
+    const id = this.toSlug(posterLink.attr("href"));
     if (!id) return null;
     const titleEl = card.find(".film-title").first();
+    const img = posterLink.find("img").first();
     return {
       id,
-      aniId: null,
+      aniId: this.aniIdFromSlug(id),
       title: titleEl.text().trim(),
-      japaneseTitle: titleEl.attr("data-jp")?.trim() || null,
-      url: `${this.baseUrl}${href}`,
-      image: posterLink.find("img").attr("data-src") || posterLink.find("img").attr("src") || null,
+      japaneseTitle: titleEl.attr("data-jname")?.trim() || null,
+      url: this.absolute(id),
+      image: img.attr("src") || img.attr("data-src") || null,
       type: "",
       duration: null,
       rating: null,
@@ -105,9 +145,7 @@ export class HiAnime {
     };
   }
 
-  private static async scrapeCardPage(
-    url: string,
-  ): Promise<HiAnimePagedResult<HiAnimeCard>> {
+  private static async scrapeCardPage(url: string): Promise<HiAnimePagedResult<HiAnimeCard>> {
     try {
       const res = await fetch(url, { headers: this.headers() });
       const html = await res.text();
@@ -116,12 +154,13 @@ export class HiAnime {
       const pagination = $("ul.pagination");
       const currentPage = this.parseInt(pagination.find(".page-item.active .page-link").text());
 
+      // The active page's <a> has no href, so "next" is the following item —
+      // either the next number or the ">" control; both carry ?page=N.
       const nextHref = pagination.find(".page-item.active").next().find("a.page-link").attr("href");
       const hasNextPage = !!nextHref && /page=\d+/.test(nextHref);
 
       const lastHref = pagination.find(".page-item:last-child a.page-link").attr("href");
-      const totalPages =
-        this.parseInt(lastHref?.split("page=")[1]) || (currentPage || 1);
+      const totalPages = this.parseInt(lastHref?.split("page=")[1]) || currentPage || 1;
 
       const results: HiAnimeCard[] = [];
       $(".flw-item").each((_, el) => {
@@ -144,41 +183,49 @@ export class HiAnime {
   // ─── Browsing endpoints ─────────────────────────────────────────────────────
 
   static async search(query: string, page: number = 1): Promise<HiAnimePagedResult<HiAnimeCard>> {
-    if (page <= 0) page = 1;
-    const q = encodeURIComponent(query.replace(/[\W_]+/g, "+"));
-    return this.scrapeCardPage(`${this.baseUrl}/browser?keyword=${q}&page=${page}`);
+    // /browser was the old site's path; hianime.at serves search at /search.
+    // encodeURIComponent handles the spacing on its own — pre-substituting "+"
+    // would be re-encoded to %2B and searched for literally.
+    const q = encodeURIComponent(query.trim());
+    return this.scrapeCardPage(`${this.baseUrl}/search?keyword=${q}&page=${Math.max(page, 1)}`);
   }
 
-  static async movies(page: number = 1) {
-    return this.scrapeCardPage(`${this.baseUrl}/movie?page=${Math.max(page, 1)}`);
+  private static category(path: string, page: number) {
+    return this.scrapeCardPage(`${this.baseUrl}/${path}?page=${Math.max(page, 1)}`);
   }
-  static async tv(page: number = 1) {
-    return this.scrapeCardPage(`${this.baseUrl}/tv?page=${Math.max(page, 1)}`);
+
+  static movies(page: number = 1) {
+    return this.category("movie", page);
   }
-  static async ova(page: number = 1) {
-    return this.scrapeCardPage(`${this.baseUrl}/ova?page=${Math.max(page, 1)}`);
+  static tv(page: number = 1) {
+    return this.category("tv", page);
   }
-  static async ona(page: number = 1) {
-    return this.scrapeCardPage(`${this.baseUrl}/ona?page=${Math.max(page, 1)}`);
+  static ova(page: number = 1) {
+    return this.category("ova", page);
   }
-  static async specials(page: number = 1) {
-    return this.scrapeCardPage(`${this.baseUrl}/special?page=${Math.max(page, 1)}`);
+  static ona(page: number = 1) {
+    return this.category("ona", page);
   }
-  static async completed(page: number = 1) {
-    return this.scrapeCardPage(`${this.baseUrl}/completed?page=${Math.max(page, 1)}`);
+  static specials(page: number = 1) {
+    return this.category("special", page);
   }
-  static async newReleases(page: number = 1) {
-    return this.scrapeCardPage(`${this.baseUrl}/new-releases?page=${Math.max(page, 1)}`);
+  static completed(page: number = 1) {
+    return this.category("latest-completed", page);
   }
-  static async recentlyUpdated(page: number = 1) {
-    return this.scrapeCardPage(`${this.baseUrl}/updates?page=${Math.max(page, 1)}`);
+  static newReleases(page: number = 1) {
+    return this.category("new-releases", page);
   }
-  static async recentlyAdded(page: number = 1) {
-    return this.scrapeCardPage(`${this.baseUrl}/recent?page=${Math.max(page, 1)}`);
+  static recentlyUpdated(page: number = 1) {
+    return this.category("recently-updated", page);
+  }
+  // /recent and /new-anime serve the same listing upstream; /new-anime is the
+  // one the site's own nav links to.
+  static recentlyAdded(page: number = 1) {
+    return this.category("new-anime", page);
   }
   static async genreSearch(genre: string, page: number = 1) {
     if (!genre) throw new Error("genre is required");
-    return this.scrapeCardPage(`${this.baseUrl}/genres/${genre}?page=${Math.max(page, 1)}`);
+    return this.category(`genres/${genre}`, page);
   }
 
   // ─── Genres list ────────────────────────────────────────────────────────────
@@ -188,9 +235,9 @@ export class HiAnime {
       const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers() });
       const $ = cheerio.load(await res.text());
       const slugs = new Set<string>();
-      $('a[href^="/genres/"]').each((_, el) => {
-        const href = $(el).attr("href") ?? "";
-        const m = /\/genres\/([^/?#]+)/.exec(href);
+      // hrefs are absolute now, so match on a contained path, not a prefix.
+      $('a[href*="/genres/"]').each((_, el) => {
+        const m = /\/genres\/([^/?#]+)/.exec($(el).attr("href") ?? "");
         if (m && m[1]) slugs.add(m[1]);
       });
       return [...slugs];
@@ -203,38 +250,28 @@ export class HiAnime {
   // ─── Home page (spotlight + sections) ───────────────────────────────────────
 
   static async home(): Promise<HiAnimeHome> {
-    const empty: HiAnimeHome = {
-      spotlight: [],
-      trending: [],
-      latestUpdates: [],
-      mostViewed: [],
-    };
+    const home: HiAnimeHome = { spotlight: [], trending: [], latestUpdates: [], mostViewed: [] };
     try {
       const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers() });
-      const html = await res.text();
-      const $ = cheerio.load(html);
+      const $ = cheerio.load(await res.text());
 
-      // Spotlight slides
       $(".swiper-slide .deslide-item").each((_, el) => {
         const slide = $(el);
         const titleEl = slide.find(".desi-head-title").first();
-        const watchHref = slide.find(".desi-buttons a[href^='/watch/']").attr("href") ?? "";
-        const id = watchHref.replace(/^\/watch\//, "");
+        const id = this.toSlug(slide.find(".desi-buttons a[href*='/watch/']").attr("href"));
         if (!id) return;
         const scd = slide.find(".sc-detail .scd-item");
         const tick = slide.find(".tick");
-        const rankText = slide.find(".desi-sub-text").text().trim();
-        const rankMatch = /#(\d+)/.exec(rankText);
-        empty.spotlight.push({
+        const rankMatch = /#(\d+)/.exec(slide.find(".desi-sub-text").text().trim());
+        const bannerImg = slide.find(".deslide-cover-img img").first();
+        home.spotlight.push({
           id,
-          aniId: null, // spotlight DOM doesn't expose aniId; resolved on info() call
+          aniId: this.aniIdFromSlug(id),
           rank: rankMatch ? parseInt(rankMatch[1]!, 10) : null,
           title: titleEl.text().trim(),
-          japaneseTitle: titleEl.attr("data-jp")?.trim() || null,
-          url: `${this.baseUrl}${watchHref}`,
-          banner: slide.find(".deslide-cover-img img").attr("data-src")
-            || slide.find(".deslide-cover-img img").attr("src")
-            || null,
+          japaneseTitle: titleEl.attr("data-jname")?.trim() || null,
+          url: this.absolute(id),
+          banner: bannerImg.attr("src") || bannerImg.attr("data-src") || null,
           description: slide.find(".desi-description").text().trim() || null,
           type: scd.eq(0).text().trim() || null,
           duration: scd.eq(1).text().trim() || null,
@@ -245,54 +282,72 @@ export class HiAnime {
         });
       });
 
-      // Trending (swiper of compact items)
       $("section.block_area_trending .swiper-slide .item").each((_, el) => {
         const parsed = this.scrapeTrendingItem($, el);
-        if (parsed) empty.trending.push(parsed);
+        if (parsed) home.trending.push(parsed);
       });
 
-      // Most Viewed (sidebar with day/week/month tabs — first tab is rendered visible).
-      // Use only the active tab to avoid 3x duplication.
-      $(".cbox-realtime .tab-content .tab-body[style*='display: block'] li").each((_, el) => {
+      // The sidebar renders day/week/month tabs; only the active pane is taken,
+      // otherwise every title shows up three times.
+      $(".cbox-realtime .tab-content .tab-pane.active li").each((_, el) => {
         const parsed = this.scrapeFlwCard($, el);
-        if (parsed) empty.mostViewed.push(parsed);
+        if (parsed) home.mostViewed.push(parsed);
       });
 
-      // Latest Updates section uses the standard .flw-item grid.
-      $("section#latest-updates .flw-item, section.block_area_home .flw-item").each((_, el) => {
+      $("section.block_area_home .flw-item").each((_, el) => {
         const parsed = this.scrapeFlwCard($, el);
-        if (parsed) empty.latestUpdates.push(parsed);
+        if (parsed) home.latestUpdates.push(parsed);
       });
 
-      return empty;
+      return home;
     } catch (err) {
       Logger.error(`HiAnime home error: ${String(err)}`);
-      return empty;
+      return home;
     }
   }
 
   static async spotlight(): Promise<HiAnimeSpotlight[]> {
-    const home = await this.home();
-    return home.spotlight;
+    return (await this.home()).spotlight;
   }
 
   // ─── Suggestions (search dropdown) ──────────────────────────────────────────
 
   static async suggestions(query: string): Promise<HiAnimeCard[]> {
     try {
-      const url = `${this.baseUrl}/ajax/anime/search?keyword=${encodeURIComponent(
-        query.replace(/[\W_]+/g, "+"),
-      )}`;
-      const res = await fetch(url, {
-        headers: { ...this.headers(), "X-Requested-With": "XMLHttpRequest" },
-      });
-      const data = (await res.json()) as { result?: any };
-      const html = typeof data.result === "string" ? data.result : data.result?.html ?? "";
-      const $ = cheerio.load(typeof html === "string" ? html : "");
+      const url = `${this.apiBase}/search/suggestions?keyword=${encodeURIComponent(query.trim())}`;
+      const res = await fetch(url, { headers: this.ajaxHeaders() });
+      const data = (await res.json()) as { html?: string };
+      if (typeof data.html !== "string") return [];
+      const $ = cheerio.load(data.html);
       const out: HiAnimeCard[] = [];
-      $(".flw-item, a.aitem").each((_, el) => {
-        const card = this.scrapeFlwCard($, el);
-        if (card) out.push(card);
+      // Suggestion rows are bare <a class="nav-item"> — a flatter layout than
+      // .flw-item, so they're read directly rather than via scrapeFlwCard.
+      $("a.nav-item").each((_, el) => {
+        const row = $(el);
+        const id = this.toSlug(row.attr("href"));
+        if (!id) return;
+        const img = row.find("img").first();
+        const nameEl = row.find(".film-name").first();
+        // .film-infor is "<span>date</span> · TV · <span>duration</span>" — the
+        // type is the bare text node between the separators, so it's read by
+        // stripping the spans and dots rather than by index.
+        const infor = row.find(".film-infor").first();
+        const type = infor.clone().find("span, i").remove().end().text().trim();
+        out.push({
+          id,
+          aniId: this.aniIdFromSlug(id),
+          title: nameEl.text().trim() || row.attr("title")?.trim() || "",
+          japaneseTitle: nameEl.attr("data-jname")?.trim() || null,
+          url: this.absolute(id),
+          image: img.attr("src") || img.attr("data-src") || null,
+          type,
+          duration: null,
+          rating: null,
+          quality: null,
+          sub: 0,
+          dub: 0,
+          episodes: 0,
+        });
       });
       return out;
     } catch (err) {
@@ -301,122 +356,131 @@ export class HiAnime {
     }
   }
 
-  // ─── Info (page metadata + episodes) ────────────────────────────────────────
+  // ─── Info (detail page metadata + episodes) ─────────────────────────────────
 
-  // The route receives the URL slug (e.g. "naruto-shippuuden-5626"). hianime
-  // exposes everything else via JSON keyed by the short aniId, so we resolve
-  // slug → aniId once by reading the watch-page DOM.
-  private static async resolveAniId(slug: string): Promise<string | null> {
-    try {
-      const res = await fetch(`${this.baseUrl}/watch/${slug}`, { headers: this.headers() });
-      const html = await res.text();
-      const $ = cheerio.load(html);
-      const fromVote = $("#vote-info").attr("data-id");
-      if (fromVote) return fromVote.trim();
-      const fromWatchList = $("#watch-list-content").attr("data-id");
-      if (fromWatchList) return fromWatchList.trim();
-      const fromTip = $("a.film-poster-ahref[data-tip]").first().attr("data-tip");
-      return fromTip?.trim() ?? null;
-    } catch (err) {
-      Logger.warn(`HiAnime resolveAniId error for ${slug}: ${String(err)}`);
-      return null;
-    }
+  /**
+   * Reads an `.anisc-info` label/value row, e.g. detailRow($, "Studios").
+   * Two row shapes exist: `.item-title` holds its value in `.name` (or `.text`
+   * for the overview), while `.item-list` (Genres) holds a list of `<a>`s.
+   */
+  private static detailRow($: cheerio.CheerioAPI, label: string): string | null {
+    const row = $(".anisc-info .item")
+      .filter((_, el) => $(el).find(".item-head").text().trim().replace(/:$/, "") === label)
+      .first();
+    if (!row.length) return null;
+
+    const collect = (sel: string) =>
+      row
+        .find(sel)
+        .map((_, el) => $(el).text().trim())
+        .get()
+        .filter(Boolean)
+        .join(", ");
+
+    const value = row.hasClass("item-list")
+      ? collect("a")
+      : row.find(".name").length
+        ? collect(".name")
+        : row.find(".text").text().trim();
+    return value.trim() || null;
   }
 
   static async info(idOrSlug: string): Promise<HiAnimeInfo | null> {
     try {
-      const slug = idOrSlug.split("$")[0]!;
-      const aniId = await this.resolveAniId(slug);
-      if (!aniId) return null;
+      const slug = this.toSlug(idOrSlug.split("$")[0]!);
+      const aniId = this.aniIdFromSlug(slug);
+      if (!slug || !aniId) return null;
 
-      const titleToken = await MegaUp.generateToken(aniId);
+      const detailRes = await fetch(`${this.baseUrl}/${slug}`, { headers: this.headers() });
+      if (!detailRes.ok) return null;
+      const $ = cheerio.load(await detailRes.text());
 
-      // Title metadata + episodes — fetched in parallel since they're independent.
-      const [titleRes, episodesRes] = await Promise.all([
-        fetch(`${this.baseUrl}/api/v1/titles/${aniId}?_=${titleToken}`, {
-          headers: { ...this.headers(), "X-Requested-With": "XMLHttpRequest" },
-        }),
-        fetch(`${this.baseUrl}/api/v1/titles/${aniId}/episodes?_=${titleToken}`, {
-          headers: { ...this.headers(), "X-Requested-With": "XMLHttpRequest" },
-        }),
-      ]);
+      const titleEl = $(".anisc-detail .film-name").first();
+      const title = titleEl.text().trim();
+      // A missing title means the slug fell through to the shell page rather
+      // than a real entry — return null so the route answers 404 instead of an
+      // empty record (the same failure mode fixed for animekai in 22674f6).
+      if (!title) return null;
 
-      const titleJson = (await titleRes.json()) as { status?: string; result?: any };
-      if (titleJson.status !== "ok" || !titleJson.result) return null;
-      const t = titleJson.result;
+      const tick = $(".anisc-detail .film-stats .tick").first();
+      const sub = this.parseInt(tick.find(".tick-sub").text());
+      const dub = this.parseInt(tick.find(".tick-dub").text());
+      const stats = $(".anisc-detail .film-stats .tick .item");
 
-      const episodesJson = (await episodesRes.json()) as { status?: string; result?: any };
-      const epResult = episodesJson.result ?? {};
+      const aired = this.detailRow($, "Aired");
+      const [startDate, endDate] = (aired ?? "").split(" to ").map((s) => s.trim() || null);
 
-      const sub = Number(t.episode_sub_latest) || 0;
-      const dub = Number(t.episode_dub_latest) || 0;
+      const splitRow = (label: string): string[] => {
+        const v = this.detailRow($, label);
+        return v
+          ? v
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean)
+          : [];
+      };
 
-      const episodes: HiAnimeEpisode[] = [];
-      const ranges = Array.isArray(epResult.rangedEpisodes) ? epResult.rangedEpisodes : [];
-      for (const range of ranges) {
-        for (const ep of range.episodes ?? []) {
-          const number = Number(ep.number);
-          episodes.push({
-            id: `${slug}$ep=${ep.slug ?? number}$token=${ep.token}`,
-            number,
-            title: ep.detail_name ?? ep.name ?? `Episode ${number}`,
-            isFiller: !!ep.is_filler,
-            isSubbed: number <= sub,
-            isDubbed: number <= dub,
-            releaseDate: ep.detail_release ?? null,
-            url: `${this.baseUrl}/watch/${slug}#ep=${ep.slug ?? number}`,
-          });
-        }
-      }
+      const poster = $(".anisc-poster img.film-poster-img").first();
+      const coverStyle = $(".anis-cover").first().attr("style") ?? "";
 
-      // Recommendations — scraped from the watch page since the JSON API doesn't expose them.
+      const episodes = await this.episodes(slug, aniId, sub, dub);
+
+      // "Recommended For You" — the only .flw-item grid on a detail page.
       const recommendations: HiAnimeCard[] = [];
-      try {
-        const watchRes = await fetch(`${this.baseUrl}/watch/${slug}`, { headers: this.headers() });
-        const $$ = cheerio.load(await watchRes.text());
-        $$("section.block_area_category .flw-item").each((_, el) => {
-          const card = this.scrapeFlwCard($$, el);
-          if (card) recommendations.push(card);
-        });
-      } catch {
-        /* recommendations are optional */
+      $("section.block_area_home .flw-item").each((_, el) => {
+        const card = this.scrapeFlwCard($, el);
+        if (card) recommendations.push(card);
+      });
+
+      // The site carries no filler data, so resolve the MAL id by exact title
+      // match and overlay Jikan's filler list — same treatment animekai and
+      // anizen get. A title that doesn't resolve just keeps isFiller: false.
+      const malId = await resolveMalId(title, titleEl.attr("data-jname")?.trim());
+      if (malId) {
+        const fillers = await getFillerEpisodes(malId);
+        for (const ep of episodes) {
+          if (fillers.has(ep.number)) ep.isFiller = true;
+        }
       }
 
       return {
         id: slug,
         aniId,
-        title: t.title_default ?? "",
-        japaneseTitle: t.title_romanji ?? null,
-        altTitles: Array.isArray(t.alt_titles) ? t.alt_titles : [],
-        description: t.synopsis ?? null,
-        image: t.poster?.medium ?? t.poster?.original ?? null,
-        banner: t.backdrop?.medium ?? t.backdrop?.original ?? null,
-        url: `${this.baseUrl}/watch/${slug}`,
-        type: t.type ?? null,
-        status: t.status ?? null,
-        season: t.season ?? null,
-        duration: t.duration ?? null,
-        rating: t.rating ?? null,
-        quality: t.quality ?? null,
-        broadcast: t.broadcast ?? null,
-        startDate: t.start_date ?? null,
-        endDate: t.end_date ?? null,
-        year: t.start_date_year ?? null,
-        episodeCount: t.episode_count ?? null,
+        title,
+        japaneseTitle: titleEl.attr("data-jname")?.trim() || this.detailRow($, "Japanese"),
+        altTitles: splitRow("Synonyms"),
+        description: this.detailRow($, "Overview"),
+        image: poster.attr("src") || poster.attr("data-src") || null,
+        banner: /url\(([^)]+)\)/.exec(coverStyle)?.[1]?.replace(/['"]/g, "") ?? null,
+        url: `${this.baseUrl}/${slug}`,
+        type: stats.eq(0).text().trim() || null,
+        status: this.detailRow($, "Status"),
+        season: this.detailRow($, "Premiered"),
+        duration: this.detailRow($, "Duration") || stats.eq(1).text().trim() || null,
+        rating: tick.find(".tick-pg").text().trim() || null,
+        quality: tick.find(".tick-quality").text().trim() || null,
+        broadcast: this.detailRow($, "Broadcast"),
+        startDate: startDate ?? null,
+        endDate: endDate && endDate !== "?" ? endDate : null,
+        year: this.parseInt(/(\d{4})/.exec(startDate ?? "")?.[1]) || null,
+        // The site publishes no total-episode figure, so this is the number of
+        // rows the episode list returned — i.e. episodes *aired* so far for a
+        // currently-airing show, not the planned total.
+        episodeCount: episodes.length || null,
         sub,
         dub,
         hasSub: sub > 0,
         hasDub: dub > 0,
         subOrDub: sub > 0 && dub > 0 ? "both" : dub > 0 ? "dub" : "sub",
-        malId: t.mal_id ? String(t.mal_id) : null,
-        anilistId: t.al_id ? String(t.al_id) : null,
-        refScore: t.ref_score ?? null,
-        followedCount: t.followed_count ?? null,
-        genres: Array.isArray(t.genres) ? t.genres.map((g: any) => g.title) : [],
-        studios: Array.isArray(t.studios) ? t.studios.map((s: any) => s.title) : [],
-        producers: Array.isArray(t.producers) ? t.producers.map((p: any) => p.title) : [],
-        countries: Array.isArray(t.countries) ? t.countries.map((c: any) => c.title) : [],
-        tags: Array.isArray(t.tags) ? t.tags.map((tg: any) => tg.title) : [],
+        // The detail page carries a MAL score but no MAL/AniList ids. The keys
+        // are kept so the response shape doesn't change for existing clients;
+        // callers that need the ids should resolve them via /mappings.
+        malId: null,
+        anilistId: null,
+        score: this.detailRow($, "MAL Score"),
+        genres: splitRow("Genres"),
+        studios: splitRow("Studios"),
+        producers: splitRow("Producers"),
         episodes,
         recommendations,
       };
@@ -426,160 +490,194 @@ export class HiAnime {
     }
   }
 
+  // GET /api/theme/episode/list/{aniId} → { status, totalItems, html }, where
+  // html is the full episode grid. Episode ids are the `data-id` on each
+  // a.ep-item and are unrelated to the anime id (the two coincide only for id 1,
+  // so never validate this parsing against One Piece alone).
+  private static async episodes(
+    slug: string,
+    aniId: string,
+    sub: number,
+    dub: number,
+  ): Promise<HiAnimeEpisode[]> {
+    try {
+      const res = await fetch(`${this.apiBase}/episode/list/${aniId}`, {
+        headers: this.ajaxHeaders(`${this.baseUrl}/watch/${slug}`),
+      });
+      const data = (await res.json()) as { html?: string };
+      if (typeof data.html !== "string") return [];
+      const $ = cheerio.load(data.html);
+
+      const episodes: HiAnimeEpisode[] = [];
+      $("a.ep-item").each((_, el) => {
+        const ep = $(el);
+        const episodeId = ep.attr("data-id")?.trim();
+        const number = this.parseInt(ep.attr("data-number"));
+        if (!episodeId) return;
+        const nameEl = ep.find(".ep-name").first();
+        episodes.push({
+          id: `${slug}$ep=${episodeId}`,
+          episodeId,
+          number,
+          title: nameEl.text().trim() || ep.attr("title")?.trim() || `Episode ${number}`,
+          japaneseTitle: nameEl.attr("data-jname")?.trim() || null,
+          // hianime.at marks no fillers at all (no filler class anywhere in the
+          // episode grid); info() overlays Jikan's list afterwards.
+          isFiller: false,
+          isSubbed: number <= sub,
+          isDubbed: number <= dub,
+          url: `${this.baseUrl}/watch/${slug}?ep=${episodeId}`,
+        });
+      });
+      return episodes;
+    } catch (err) {
+      Logger.warn(`HiAnime episodes error for ${slug}: ${String(err)}`);
+      return [];
+    }
+  }
+
   // ─── Episode servers ────────────────────────────────────────────────────────
 
-  static async fetchEpisodeServers(
+  /**
+   * The site offers only `sub` and `dub` groups now — the old site's separate
+   * softsub tier is gone. "hardsub"/"softsub"/"sub" are all accepted and map to
+   * `sub` so existing clients keep working.
+   */
+  private static normalizeType(type: string | undefined): HiAnimeAudioType {
+    return String(type ?? "").toLowerCase() === "dub" ? "dub" : "sub";
+  }
+
+  /** Episode ids are `<slug>$ep=<episodeId>`; a bare numeric id is also accepted. */
+  private static parseEpisodeId(episodeId: string): { slug: string; ep: string } | null {
+    const ep = episodeId.split("$ep=")[1]?.split("$")[0]?.trim();
+    const slug = this.toSlug(episodeId.split("$")[0]!);
+    if (ep) return { slug, ep };
+    return /^\d+$/.test(slug) ? { slug: "", ep: slug } : null;
+  }
+
+  /**
+   * Raw server list for an episode. Each `data-hash` is base64 of the embed URL
+   * — hianime applies no encryption of its own here.
+   */
+  private static async serverList(
     episodeId: string,
-    subOrDub: "softsub" | "dub" | "hardsub" = "hardsub",
-  ): Promise<HiAnimeServer[]> {
-    try {
-      const token = episodeId.split("$token=")[1];
-      if (!token) return [];
+    type: HiAnimeAudioType,
+  ): Promise<{ name: string; type: string; embed: string }[]> {
+    const parsed = this.parseEpisodeId(episodeId);
+    if (!parsed) return [];
 
-      const ajaxToken = await MegaUp.generateToken(token);
-      const res = await fetch(
-        `${this.baseUrl}/ajax/links/list?token=${token}&_=${ajaxToken}`,
-        { headers: { ...this.headers(), "X-Requested-With": "XMLHttpRequest" } },
-      );
-      const data = (await res.json()) as { result?: string };
-      if (typeof data.result !== "string") return [];
+    // A bare numeric id carries no slug, so fall back to the site root rather
+    // than building a "/watch/?ep=" referer that points at nothing.
+    const referer = parsed.slug
+      ? `${this.baseUrl}/watch/${parsed.slug}?ep=${parsed.ep}`
+      : `${this.baseUrl}/`;
 
-      const $ = cheerio.load(data.result);
-      const servers: HiAnimeServer[] = [];
+    const res = await fetch(`${this.apiBase}/episode/servers?episodeId=${parsed.ep}`, {
+      headers: this.ajaxHeaders(referer),
+    });
+    const data = (await res.json()) as { html?: string };
+    if (typeof data.html !== "string") return [];
 
-      const targetGroups =
-        subOrDub === "dub"
-          ? [{ id: "dub", type: "dub" as const }]
-          : [
-              { id: "sub", type: "hardsub" as const },
-              { id: "softsub", type: "softsub" as const },
-            ];
-
-      for (const group of targetGroups) {
-        const items = $(`.servers-${group.id} .server-item, .ps_-block-${group.id} .server-item`);
-        await Promise.all(
-          items.toArray().map(async (server) => {
-            const lid = $(server).find(".server").attr("data-lid");
-            if (!lid) return;
-            const viewToken = await MegaUp.generateToken(lid);
-            const viewRes = await fetch(
-              `${this.baseUrl}/ajax/links/view?id=${lid}&_=${viewToken}`,
-              { headers: { ...this.headers(), "X-Requested-With": "XMLHttpRequest" } },
-            );
-            const viewData = (await viewRes.json()) as { result?: string };
-            if (!viewData.result) return;
-            const decoded = await MegaUp.decodeIframeData(viewData.result);
-            const suffix =
-              group.type === "hardsub" ? " (HardSub)" : group.type === "softsub" ? " (SoftSub)" : "";
-            servers.push({
-              name: `megaup ${$(server).find(".server").text().trim()}${suffix}`.toLowerCase(),
-              url: decoded.url,
-              isDub: group.type === "dub",
-              intro: { start: decoded.skip.intro[0], end: decoded.skip.intro[1] },
-              outro: { start: decoded.skip.outro[0], end: decoded.skip.outro[1] },
-            });
-          }),
-        );
+    const $ = cheerio.load(data.html);
+    const out: { name: string; type: string; embed: string }[] = [];
+    $(".server-item").each((_, el) => {
+      const item = $(el);
+      const itemType = (item.attr("data-type") ?? "").toLowerCase();
+      if (itemType !== type) return;
+      const hash = item.attr("data-hash");
+      if (!hash) return;
+      let embed: string;
+      try {
+        embed = Buffer.from(hash, "base64").toString("utf8");
+      } catch {
+        return;
       }
+      if (!/^https?:\/\//.test(embed)) return;
+      out.push({
+        name: item.attr("data-server-name")?.trim() || item.find("a.btn").text().trim(),
+        type: itemType,
+        embed,
+      });
+    });
+    return out;
+  }
 
-      return servers;
+  static async fetchEpisodeServers(episodeId: string, subOrDub?: string): Promise<HiAnimeServer[]> {
+    try {
+      const type = this.normalizeType(subOrDub);
+      const servers = await this.serverList(episodeId, type);
+      return servers.map((s) => ({
+        name: s.name.toLowerCase(),
+        url: s.embed,
+        type: s.type,
+        isDub: type === "dub",
+        // The embed hosts hard-check Referer, so surface the one they expect
+        // rather than leaving clients to guess (cf. 0706934 for anikoto).
+        headers: { Referer: `${this.baseUrl}/` },
+      }));
     } catch (err) {
       Logger.error(`HiAnime fetchEpisodeServers error: ${String(err)}`);
       return [];
     }
   }
 
-  // ─── Streams (server list + decrypted sources) ──────────────────────────────
+  // ─── Streams (server list + extracted sources) ──────────────────────────────
 
-  static async streams(
-    _animeId: string,
-    episodeId: string,
-    type?: "softsub" | "dub" | "hardsub",
-  ): Promise<any> {
+  static async streams(_animeId: string, episodeId: string, type?: string): Promise<any> {
+    const audio = this.normalizeType(type);
     try {
-      const token = episodeId.split("$token=")[1];
-      if (!token) return { isDub: false, results: [] };
+      const servers = await this.serverList(episodeId, audio);
+      if (!servers.length) return { isDub: audio === "dub", results: [] };
 
-      const ajaxToken = await MegaUp.generateToken(token);
-      const res = await fetch(
-        `${this.baseUrl}/ajax/links/list?token=${token}&_=${ajaxToken}`,
-        { headers: { ...this.headers(), "X-Requested-With": "XMLHttpRequest" } },
+      const suffix = audio === "dub" ? " (Dub)" : " (Sub)";
+
+      const extractions = await Promise.all(
+        servers.map(async (server) => {
+          // zokoanime (and anything else unrecognised) has no known source
+          // chain, so it is surfaced as an iframe the client can embed directly
+          // rather than dropped — those players work fine in a browser.
+          const extracted = MegaPlay.isExtractable(server.embed)
+            ? await MegaPlay.extract(server.embed, this.baseUrl)
+            : null;
+          const refHeaders = extracted?.referer ? { Referer: extracted.referer } : undefined;
+
+          return {
+            extracted,
+            result: {
+              name: `${server.name}${suffix}`,
+              iframe: server.embed,
+              headers: { Referer: `${this.baseUrl}/` },
+              sources: (extracted?.sources ?? []).map((s) => ({
+                url: proxifySource(s.url, refHeaders),
+                isM3U8: s.isM3U8,
+              })),
+              subtitles: (extracted?.subtitles ?? []).map((sb) => ({
+                ...sb,
+                url: proxifyFetch(sb.url, refHeaders),
+              })),
+            },
+          };
+        }),
       );
-      const data = (await res.json()) as { result?: string };
-      if (typeof data.result !== "string") return { isDub: false, results: [] };
 
-      const $ = cheerio.load(data.result);
-      const results: any[] = [];
-      const seen = new Set<string>();
-      const isDubRequest = type === "dub";
-
-      const targetGroups = isDubRequest
-        ? [{ id: "dub", label: "dub" as const, subType: null }]
-        : [
-            { id: "sub", label: "hardsub" as const, subType: "hard" },
-            { id: "softsub", label: "softsub" as const, subType: "soft" },
-          ];
-
-      let globalIntro: [number, number] | null = null;
-      let globalOutro: [number, number] | null = null;
-
-      for (const group of targetGroups) {
-        const items = $(`.servers-${group.id} .server-item, .ps_-block-${group.id} .server-item`);
-
-        for (const item of items.toArray()) {
-          const lid = $(item).find(".server").attr("data-lid");
-          if (!lid || seen.has(lid)) continue;
-          seen.add(lid);
-
-          const viewToken = await MegaUp.generateToken(lid);
-          const viewData = (await (
-            await fetch(`${this.baseUrl}/ajax/links/view?id=${lid}&_=${viewToken}`, {
-              headers: { ...this.headers(), "X-Requested-With": "XMLHttpRequest" },
-            })
-          ).json()) as { result?: string };
-          if (!viewData.result) continue;
-
-          const decoded = await MegaUp.decodeIframeData(viewData.result);
-          const videoSources = await MegaUp.extract(decoded.url);
-
-          if (!globalIntro && !globalOutro) {
-            globalIntro = decoded.skip.intro;
-            globalOutro = decoded.skip.outro;
-          }
-
-          const formattedSubtitles = (videoSources.subtitles || []).map((sub: any) => ({
-            ...sub,
-            type: group.subType || "none",
-          }));
-
-          const suffix =
-            group.label === "hardsub"
-              ? " (HardSub)"
-              : group.label === "softsub"
-                ? " (SoftSub)"
-                : group.label === "dub"
-                  ? " (Dub)"
-                  : "";
-
-          results.push({
-            name: `MegaUp ${$(item).find(".server").text().trim()}${suffix}`,
-            iframe: decoded.url,
-            sources: videoSources.sources,
-            subtitles: formattedSubtitles,
-            download: videoSources.download,
-          });
-        }
-      }
+      // Picked after the fan-out rather than inside it: assigning from within
+      // concurrent callbacks would take whichever request happened to land
+      // first. Servers that report a zero-length range are skipped so a real
+      // one further down the list still wins.
+      const firstRange = (pick: "intro" | "outro") =>
+        extractions.map((e) => e.extracted?.[pick]).find((r) => r && r.end > r.start) ?? null;
+      const intro = firstRange("intro");
+      const outro = firstRange("outro");
 
       return {
-        isDub: isDubRequest,
-        results,
-        ...(globalIntro && { intro: globalIntro }),
-        ...(globalOutro && { outro: globalOutro }),
+        isDub: audio === "dub",
+        results: extractions.map((e) => e.result),
+        ...(intro && { intro }),
+        ...(outro && { outro }),
       };
     } catch (err) {
       Logger.error(`HiAnime streams error: ${String(err)}`);
-      return { isDub: false, results: [] };
+      return { isDub: audio === "dub", results: [] };
     }
   }
 }

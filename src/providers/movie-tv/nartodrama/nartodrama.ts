@@ -6,7 +6,7 @@ import { episodeItemSchema } from "./types.js";
 import {
   UA,
   absoluteUrl,
-  fetchWatchPage,
+  getWatchContext,
   isHlsSource,
   resolveSource,
   servesDirect,
@@ -211,7 +211,7 @@ export class NartoDrama {
     try {
       const [$, watch] = await Promise.all([
         this.fetchHtml(`${nartodrama}/detail/watch/${slug}?lang=en-US`),
-        fetchWatchPage(slug, 1).catch(() => null),
+        getWatchContext(slug, 1).catch(() => null),
       ]);
 
       const title = $("h1.movie-title").text().trim();
@@ -282,7 +282,7 @@ export class NartoDrama {
    */
   static async watch(slug: string, episode: number): Promise<DramaStream | null> {
     try {
-      const ctx = await fetchWatchPage(slug, episode);
+      const ctx = await getWatchContext(slug, episode);
       if (!ctx) return null;
 
       const resolved = await resolveSource(ctx, slug, episode);

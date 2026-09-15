@@ -1,3 +1,4 @@
+import { Cache } from "../../../../core/cache.js";
 import { Logger } from "../../../../core/logger.js";
 import { nartodrama, nartodrama_edge } from "../../../origins.js";
 import { refreshSourceSchema, episodeItemsSchema } from "../types.js";
@@ -135,7 +136,8 @@ async function fetchWithRetry(url: string, init: RequestInit, timeoutMs = 15000)
 }
 
 export interface WatchPageContext {
-  html: string;
+  /** Only present on a freshly fetched page — never cached (it is ~900 KB). */
+  html?: string;
   refreshBase: string;
   contextToken: string | null;
   edgeBase: string;
@@ -168,6 +170,58 @@ export async function fetchWatchPage(
     app: readScriptString(html, "movieSourceAppName"),
     episodes: readEpisodeItems(html),
   };
+}
+
+/** Seconds until the rs_ctx token expires, or null if it can't be read. */
+function tokenLifetime(token: string | null): number | null {
+  if (!token) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(token.split(".")[0], "base64").toString());
+    const exp = Number(payload?.exp);
+    if (!exp) return null;
+    return exp - Math.floor(Date.now() / 1000);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Watch-page context, cached per series.
+ *
+ * The page is ~900 KB and is fetched only to read the rs_ctx token, the episode
+ * list and the upstream app name — the actual stream still comes from a live
+ * edge call afterwards. The token is series-scoped (its payload carries the
+ * slug but no episode) and runs ~12h, so one fetch serves every episode of a
+ * series instead of re-pulling 900 KB per stream request.
+ *
+ * TTL is bounded by the token's own expiry so a cached context can never
+ * outlive the credential it exists to carry.
+ */
+export async function getWatchContext(
+  slug: string,
+  episode: number,
+): Promise<WatchPageContext | null> {
+  const key = `nartodrama:ctx:${slug}`;
+
+  const cached = await Cache.get(key);
+  if (cached) {
+    try {
+      return JSON.parse(cached) as WatchPageContext;
+    } catch {
+      /* corrupt entry — fall through and refetch */
+    }
+  }
+
+  const ctx = await fetchWatchPage(slug, episode);
+  if (!ctx) return null;
+
+  // Never store the raw HTML.
+  const { html: _html, ...storable } = ctx;
+  const lifetime = tokenLifetime(ctx.contextToken);
+  const ttl = Math.min(lifetime ? lifetime - 300 : 1800, 21600);
+  if (ttl > 60) Cache.set(key, JSON.stringify(storable), ttl);
+
+  return ctx;
 }
 
 /**

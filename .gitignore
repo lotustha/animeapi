@@ -70,3 +70,8 @@ logs
 package-lock.json
 bun.lockb
 deno.lock
+# nartodrama local catalogue (SQLite)
+/data/
+*.db
+*.db-wal
+*.db-shm

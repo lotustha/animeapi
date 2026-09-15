@@ -123,6 +123,8 @@ export interface DramaEpisode {
 export interface DramaInfo {
   id: string;
   title: string;
+  /** Upstream app backing this title (idrama, melolo, reelshort, …). */
+  provider?: string;
   url: string;
   poster: string;
   description: string;

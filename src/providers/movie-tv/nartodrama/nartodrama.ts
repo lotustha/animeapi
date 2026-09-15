@@ -260,6 +260,7 @@ export class NartoDrama {
       return {
         id: slug,
         title,
+        provider: watch?.app || "",
         url: `${nartodrama}/detail/watch/${slug}`,
         poster: this.absolute($("div.movie-meta img.poster").attr("src") || ""),
         description: $("div.movie-desc").text().trim() || this.descriptionFromLdJson($),

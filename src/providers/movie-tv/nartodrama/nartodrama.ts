@@ -1,0 +1,336 @@
+import * as cheerio from "cheerio";
+import { Logger } from "../../../core/logger.js";
+import { proxifySource, proxifyFetch } from "../../../core/proxy.js";
+import { nartodrama } from "../../origins.js";
+import { episodeItemSchema } from "./types.js";
+import {
+  UA,
+  absoluteUrl,
+  fetchWatchPage,
+  isHlsSource,
+  resolveSource,
+} from "./scraper/refresh-source.js";
+import { fetchProviderSections, resolveImportSlug } from "./scraper/provider-explorer.js";
+
+import type {
+  DramaCard,
+  DramaEpisode,
+  DramaInfo,
+  DramaSource,
+  DramaStream,
+  DramaSubtitle,
+  Paginated,
+  ProviderCatalogue,
+  UpstreamProvider,
+} from "./types.js";
+
+const EMPTY_PAGE: Paginated<DramaCard> = { currentPage: 1, hasNextPage: false, results: [] };
+
+export class NartoDrama {
+  private static async fetchHtml(url: string) {
+    const res = await fetch(url, {
+      headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
+    });
+    if (!res.ok) throw new Error(`Fetch failed (${res.status}): ${url}`);
+    return cheerio.load(await res.text());
+  }
+
+  private static absolute(url: string) {
+    if (!url) return "";
+    if (url.startsWith("http")) return url;
+    return nartodrama + (url.startsWith("/") ? url : "/" + url);
+  }
+
+  /** `/detail/watch/<slug>?lang=en-US&from=home` → `<slug>` */
+  private static slugFromUrl(url: string) {
+    const match = url.match(/\/detail\/watch\/([^/?#]+)/);
+    return match ? match[1] : "";
+  }
+
+  /**
+   * Every listing page (home, search, genre, tag) renders the same
+   * `article.card` grid, so one parser covers all of them.
+   */
+  private static parseCards($: cheerio.CheerioAPI): DramaCard[] {
+    const results: DramaCard[] = [];
+
+    $("article.card").each((_, el) => {
+      const card = $(el);
+      const href =
+        card.attr("data-watch-url") || card.find("a.card-link-overlay").attr("href") || "";
+      const id = this.slugFromUrl(href);
+      if (!id) return;
+
+      const img = card.find("img.poster");
+      const title =
+        card.attr("data-search-title") ||
+        card.find("h3.title").attr("title") ||
+        card.find("h3.title").text().trim() ||
+        img.attr("alt") ||
+        "";
+
+      results.push({
+        id,
+        title: title.trim(),
+        url: `${nartodrama}/detail/watch/${id}`,
+        poster: this.absolute(img.attr("data-src") || img.attr("src") || ""),
+      });
+    });
+
+    return results;
+  }
+
+  /**
+   * Listing pages disagree on how they advertise the next page: the home grid
+   * renders a real pagination anchor, while /search only emits a
+   * `<link rel="next">` in the head. Checking the anchor alone reports
+   * hasNextPage:false on search and clients stop after the first 24 results.
+   */
+  private static hasNextPage($: cheerio.CheerioAPI, page: number) {
+    return $(`link[rel="next"]`).length > 0 || $(`a[href*="page=${page + 1}"]`).length > 0;
+  }
+
+  /**
+   * Some titles render no `.movie-desc` block at all; for those the only
+   * synopsis on the page is the TVSeries ld+json, which appends a fixed
+   * site-wide marketing sentence that gets trimmed back off here.
+   */
+  private static descriptionFromLdJson($: cheerio.CheerioAPI): string {
+    let description = "";
+
+    $('script[type="application/ld+json"]').each((_, el) => {
+      if (description) return;
+      try {
+        const data = JSON.parse($(el).text());
+        if (data?.["@type"] === "TVSeries" || data?.["@type"] === "Movie") {
+          description = String(data.description || "");
+        }
+      } catch {
+        /* malformed ld+json — ignore and try the next block */
+      }
+    });
+
+    return description.split(" Narto Drama - Watch Short Dramas")[0].trim();
+  }
+
+  private static async listing(path: string, page: number): Promise<Paginated<DramaCard>> {
+    try {
+      const url = new URL(nartodrama + path);
+      url.searchParams.set("lang", "en-US");
+      if (page > 1) url.searchParams.set("page", String(page));
+
+      const $ = await this.fetchHtml(url.toString());
+      return {
+        currentPage: page,
+        hasNextPage: this.hasNextPage($, page),
+        results: this.parseCards($),
+      };
+    } catch (err) {
+      Logger.error(err);
+      return { ...EMPTY_PAGE, currentPage: page };
+    }
+  }
+
+  static async home(page = 1) {
+    return this.listing("/", page);
+  }
+
+  static async search(query: string, page = 1): Promise<Paginated<DramaCard>> {
+    try {
+      const url = new URL(nartodrama + "/search");
+      url.searchParams.set("q", query);
+      url.searchParams.set("lang", "en-US");
+      if (page > 1) url.searchParams.set("page", String(page));
+
+      const $ = await this.fetchHtml(url.toString());
+      return {
+        currentPage: page,
+        hasNextPage: this.hasNextPage($, page),
+        results: this.parseCards($),
+      };
+    } catch (err) {
+      Logger.error(err);
+      return { ...EMPTY_PAGE, currentPage: page };
+    }
+  }
+
+  static async genre(genre: string, page = 1) {
+    return this.listing(`/genre/${genre}`, page);
+  }
+
+  static async tag(tag: string, page = 1) {
+    return this.listing(`/tag/${tag}`, page);
+  }
+
+  /** The ~41 upstream apps narto-drama aggregates (iDrama, ReelShort, …). */
+  static async providers(): Promise<UpstreamProvider[]> {
+    const catalogue = await fetchProviderSections();
+    return catalogue?.providers ?? [];
+  }
+
+  /**
+   * One upstream provider's own catalogue, grouped into its channels/tabs.
+   *
+   * An unknown `provider=` is not an error upstream — the endpoint answers 200
+   * with whichever app is currently promoted (bibishort), so an unvalidated key
+   * would serve the wrong catalogue and cache it under the requested name.
+   * Treat a mismatch between what was asked for and what came back as a miss.
+   */
+  static async providerCatalogue(key: string): Promise<ProviderCatalogue | null> {
+    const catalogue = await fetchProviderSections(key);
+    if (!catalogue) return null;
+
+    const wanted = key.trim().toLowerCase();
+    if (catalogue.provider.toLowerCase() !== wanted) return null;
+
+    return catalogue;
+  }
+
+  /**
+   * Map a provider catalogue entry (provider + bookId) to a local slug that
+   * info()/watch() accept. Kept as its own step because resolving every item in
+   * a catalogue eagerly would cost one request per item.
+   */
+  static async resolve(provider: string, bookId: string) {
+    const slug = await resolveImportSlug(provider, bookId);
+    if (!slug) return null;
+    return { provider, bookId, slug, url: `${nartodrama}/detail/watch/${slug}` };
+  }
+
+  /**
+   * Series metadata plus the full episode list.
+   *
+   * These live on two different pages: the detail page carries the title,
+   * poster, description and tags, while the rich episode list (ids, thumbnails,
+   * playable flags) is only embedded in a watch page. Both are fetched in
+   * parallel; if the watch page fails the episode list degrades to the plain
+   * `a.episode-item` links on the detail page.
+   */
+  static async info(slug: string): Promise<DramaInfo | null> {
+    try {
+      const [$, watch] = await Promise.all([
+        this.fetchHtml(`${nartodrama}/detail/watch/${slug}?lang=en-US`),
+        fetchWatchPage(slug, 1).catch(() => null),
+      ]);
+
+      const title = $("h1.movie-title").text().trim();
+      if (!title) return null;
+
+      const tags: string[] = [];
+      $("a.movie-tag-pill").each((_, el) => {
+        const tag = $(el).text().trim().replace(/^#/, "");
+        if (tag) tags.push(tag);
+      });
+
+      let episodes: DramaEpisode[] = (watch?.episodes ?? []).flatMap((raw) => {
+        const parsed = episodeItemSchema.safeParse(raw);
+        if (!parsed.success) return [];
+        const ep = parsed.data;
+        const number = ep.route_episode_number ?? ep.number;
+        return [
+          {
+            id: `${slug}$${number}`,
+            number,
+            title: ep.title || `Episode ${number}`,
+            thumbnail: ep.thumb_url || "",
+            isPlayable: ep.is_playable !== false,
+          },
+        ];
+      });
+
+      if (episodes.length === 0) {
+        const numbers = new Set<number>();
+        $("a.episode-item").each((_, el) => {
+          const href = $(el).attr("href") || "";
+          const match = href.match(/\/detail\/watch\/[^/?#]+\/(\d+)/);
+          if (match) numbers.add(Number(match[1]));
+        });
+        episodes = [...numbers]
+          .sort((a, b) => a - b)
+          .map((number) => ({
+            id: `${slug}$${number}`,
+            number,
+            title: `Episode ${number}`,
+            thumbnail: "",
+            isPlayable: true,
+          }));
+      }
+
+      return {
+        id: slug,
+        title,
+        url: `${nartodrama}/detail/watch/${slug}`,
+        poster: this.absolute($("div.movie-meta img.poster").attr("src") || ""),
+        description: $("div.movie-desc").text().trim() || this.descriptionFromLdJson($),
+        totalEpisodes: episodes.length,
+        tags,
+        episodes,
+      };
+    } catch (err) {
+      Logger.error(err);
+      return null;
+    }
+  }
+
+  /**
+   * Resolve playable sources for one episode.
+   *
+   * The returned CDN URL is signed and short-lived, and the upstream CDN 403s
+   * when a narto-drama Referer is present — so sources are proxied WITHOUT any
+   * forwarded headers. Subtitles go through /proxy/fetch for CORS only.
+   */
+  static async watch(slug: string, episode: number): Promise<DramaStream | null> {
+    try {
+      const ctx = await fetchWatchPage(slug, episode);
+      if (!ctx) return null;
+
+      const resolved = await resolveSource(ctx, slug, episode);
+      if (!resolved) return null;
+
+      const primary = resolved.play_url || resolved.direct_play_url || "";
+      const sources: DramaSource[] = [];
+      const seen = new Set<string>();
+
+      const push = (raw: string, quality: string) => {
+        const url = absoluteUrl(raw);
+        if (!url || seen.has(url)) return;
+        seen.add(url);
+        const isM3U8 = isHlsSource(url, resolved.direct_play_is_hls);
+        sources.push({ url: proxifySource(url, undefined, isM3U8), quality, isM3U8 });
+      };
+
+      push(primary, "default");
+      for (const res of resolved.multi_resolutions ?? []) {
+        if (res.stream_url) push(res.stream_url, res.label || "auto");
+      }
+
+      if (sources.length === 0) return null;
+
+      const subtitles: DramaSubtitle[] = [];
+      const subSeen = new Set<string>();
+      // Normalize before deduping: the same track can arrive site-relative in
+      // `subtitle_url` and absolute in `multi_subtitles`.
+      const pushSub = (raw: string | undefined, label: string) => {
+        const url = absoluteUrl(raw || "");
+        if (!url || subSeen.has(url)) return;
+        subSeen.add(url);
+        subtitles.push({ label, url: proxifyFetch(url) });
+      };
+
+      pushSub(resolved.subtitle_url || resolved.direct_subtitle_url, "Default");
+      for (const sub of resolved.multi_subtitles ?? []) {
+        pushSub(sub.url, sub.label || "Unknown");
+      }
+
+      return {
+        id: `${slug}$${episode}`,
+        episode: resolved.episode_number ?? episode,
+        sources,
+        subtitles,
+      };
+    } catch (err) {
+      Logger.error(err);
+      return null;
+    }
+  }
+}

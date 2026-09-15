@@ -1,9 +1,17 @@
 import { SERVER_ORIGIN } from "./config.js";
 
-export const proxifySource = (url: string, headers?: Record<string, string> | undefined) => {
+// `forceHls` is for sources that are HLS but carry no `.m3u8` in the URL —
+// tokenized player endpoints (e.g. nartodrama's /e/m/<jwt>?mh=1) serve
+// application/vnd.apple.mpegurl from an extensionless path, and would otherwise
+// be misrouted to the mp4 proxy and never get their playlist rewritten.
+export const proxifySource = (
+  url: string,
+  headers?: Record<string, string> | undefined,
+  forceHls = false,
+) => {
   const urlParam = `?url=` + encodeURIComponent(url);
   const headerParam = headers ? `&headers=` + encodeURIComponent(JSON.stringify(headers)) : "";
-  if (url.includes(".m3u")) {
+  if (forceHls || url.includes(".m3u")) {
     // count as hls source
     return SERVER_ORIGIN + "/proxy/m3u8-proxy" + urlParam + headerParam;
   } else {

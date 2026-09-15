@@ -3,12 +3,14 @@ import { primesrcRoutes } from "./primesrc/route.js";
 import { yFlixRoutes } from "./yflix/route.js";
 import { himoviesRoutes } from "./himovies/route.js";
 import { flixhqRoutes } from "./flixhq/route.js";
+import { nartoDramaRoutes } from "./nartodrama/route.js";
 
 export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
   .use(primesrcRoutes)
   .use(yFlixRoutes)
   .use(himoviesRoutes)
   .use(flixhqRoutes)
+  .use(nartoDramaRoutes)
 
   // ─── Overview Endpoint ────────────────────────────────────────────────────────
   .get(
@@ -16,7 +18,7 @@ export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
     () => ({
       service: "movie-tv",
       description: "Unified Movie & TV API — provider-isolated route architecture",
-      providers: ["primesrc", "yflix", "himovies", "flixhq"],
+      providers: ["primesrc", "yflix", "himovies", "flixhq", "nartodrama"],
       endpoints: {
         primesrc: [
           "GET /movie-tv/primesrc/movie/:tmdbid   → Get movie sources",
@@ -53,6 +55,17 @@ export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
           "GET /movie-tv/flixhq/countries/:country → Media by country",
           "GET /movie-tv/flixhq/media/:id/servers   → Available servers for episode",
           "GET /movie-tv/flixhq/sources/:episodeId  → Stream sources and subtitles",
+        ],
+        nartodrama: [
+          "GET /movie-tv/nartodrama/providers          → Upstream apps aggregated (iDrama, ReelShort, …)",
+          "GET /movie-tv/nartodrama/provider/:key      → One upstream app's catalogue",
+          "GET /movie-tv/nartodrama/resolve/:provider/:bookId → Provider item → local slug",
+          "GET /movie-tv/nartodrama/home?page=1        → Latest short dramas",
+          "GET /movie-tv/nartodrama/search/:query?page=1 → Search short dramas",
+          "GET /movie-tv/nartodrama/genre/:genre?page=1 → Browse by genre",
+          "GET /movie-tv/nartodrama/tag/:tag?page=1   → Browse by tag",
+          "GET /movie-tv/nartodrama/info/:slug        → Series info & episode list",
+          "GET /movie-tv/nartodrama/watch/:slug/:episode → Episode stream sources",
         ],
       },
     }),

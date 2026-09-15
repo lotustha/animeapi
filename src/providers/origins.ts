@@ -34,4 +34,8 @@ export const allmanga_api = "https://api.allanime.day/api";
 export const mangaball = "https://mangaball.net";
 
 export const himovies = "https://himovies.to";
+// Short-drama aggregator. Stream resolution goes through the DNS-only edge host,
+// not the main domain — nginx there 403s /refresh-source outright.
+export const nartodrama = "https://narto-drama.com";
+export const nartodrama_edge = "https://edge.narto-drama.com";
 export const tidal = "https://api.tidal.com/v1";

@@ -9,6 +9,7 @@ import {
   fetchWatchPage,
   isHlsSource,
   resolveSource,
+  servesDirect,
 } from "./scraper/refresh-source.js";
 import { fetchProviderSections, resolveImportSlug } from "./scraper/provider-explorer.js";
 
@@ -291,12 +292,22 @@ export class NartoDrama {
       const sources: DramaSource[] = [];
       const seen = new Set<string>();
 
+      // Geo-blocked upstreams must not be proxied: routing them through this
+      // server guarantees a 410, while the raw URL plays from the viewer's own
+      // connection. See servesDirect() for why.
+      const direct = servesDirect(ctx.app);
+
       const push = (raw: string, quality: string) => {
         const url = absoluteUrl(raw);
         if (!url || seen.has(url)) return;
         seen.add(url);
         const isM3U8 = isHlsSource(url, resolved.direct_play_is_hls);
-        sources.push({ url: proxifySource(url, undefined, isM3U8), quality, isM3U8 });
+        sources.push({
+          url: direct ? url : proxifySource(url, undefined, isM3U8),
+          quality,
+          isM3U8,
+          proxied: !direct,
+        });
       };
 
       push(primary, "default");
@@ -325,6 +336,7 @@ export class NartoDrama {
       return {
         id: `${slug}$${episode}`,
         episode: resolved.episode_number ?? episode,
+        provider: ctx.app || "",
         sources,
         subtitles,
       };

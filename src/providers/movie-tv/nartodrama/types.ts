@@ -140,11 +140,18 @@ export interface DramaSource {
   url: string;
   quality: string;
   isM3U8: boolean;
+  /**
+   * False when the URL points straight at the upstream CDN instead of this
+   * server's proxy — the case for upstreams that geo-block the server itself.
+   */
+  proxied: boolean;
 }
 
 export interface DramaStream {
   id: string;
   episode: number;
+  /** Upstream app serving this title (idrama, melolo, reelshort, …). */
+  provider: string;
   sources: DramaSource[];
   subtitles: DramaSubtitle[];
 }

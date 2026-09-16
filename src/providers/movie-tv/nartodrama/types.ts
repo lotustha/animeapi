@@ -147,6 +147,17 @@ export interface DramaSource {
    * server's proxy — the case for upstreams that geo-block the server itself.
    */
   proxied: boolean;
+  /**
+   * The upstream CDN URL, unwrapped.
+   *
+   * Always present, even when `url` is proxied, so a client can try the CDN
+   * first and fall back to the proxy only if it actually fails. Measured on a
+   * 353 KB segment: 0.12s direct against 1.83s through the proxy, and the
+   * proxy also rewrites every segment URI in a playlist so the whole stream
+   * funnels through this server. Going direct where it works is the single
+   * largest playback win available.
+   */
+  directUrl: string;
 }
 
 export interface DramaStream {

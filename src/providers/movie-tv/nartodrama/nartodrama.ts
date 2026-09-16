@@ -4,6 +4,7 @@ import { proxifySource, proxifyFetch } from "../../../core/proxy.js";
 import { nartodrama } from "../../origins.js";
 import { episodeItemSchema } from "./types.js";
 import {
+  LANG,
   UA,
   absoluteUrl,
   getWatchContext,
@@ -117,7 +118,7 @@ export class NartoDrama {
   private static async listing(path: string, page: number): Promise<Paginated<DramaCard>> {
     try {
       const url = new URL(nartodrama + path);
-      url.searchParams.set("lang", "en-US");
+      url.searchParams.set("lang", LANG);
       if (page > 1) url.searchParams.set("page", String(page));
 
       const $ = await this.fetchHtml(url.toString());
@@ -140,7 +141,7 @@ export class NartoDrama {
     try {
       const url = new URL(nartodrama + "/search");
       url.searchParams.set("q", query);
-      url.searchParams.set("lang", "en-US");
+      url.searchParams.set("lang", LANG);
       if (page > 1) url.searchParams.set("page", String(page));
 
       const $ = await this.fetchHtml(url.toString());
@@ -210,7 +211,7 @@ export class NartoDrama {
   static async info(slug: string): Promise<DramaInfo | null> {
     try {
       const [$, watch] = await Promise.all([
-        this.fetchHtml(`${nartodrama}/detail/watch/${slug}?lang=en-US`),
+        this.fetchHtml(`${nartodrama}/detail/watch/${slug}?lang=${LANG}`),
         getWatchContext(slug, 1).catch(() => null),
       ]);
 
@@ -308,6 +309,10 @@ export class NartoDrama {
           quality,
           isM3U8,
           proxied: !direct,
+          // Handed out alongside the proxied URL rather than instead of it:
+          // some upstreams geo-block this server, others geo-block the viewer,
+          // and only the client can find out which. It tries this first.
+          directUrl: url,
         });
       };
 

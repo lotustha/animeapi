@@ -1,7 +1,7 @@
 import { Logger } from "../../../../core/logger.js";
 import { nartodrama } from "../../../origins.js";
 import { providerSectionsSchema } from "../types.js";
-import { UA } from "./refresh-source.js";
+import { LANG, UA } from "./refresh-source.js";
 
 import type { ProviderCatalogue, ProviderItem, ProviderSection } from "../types.js";
 
@@ -17,6 +17,9 @@ export async function fetchProviderSections(provider?: string): Promise<Provider
   try {
     const url = new URL(SECTIONS_URL);
     if (provider) url.searchParams.set("provider", provider);
+    // Without this the endpoint answers in whatever language upstream guessed
+    // from the server's IP - the reason imported catalogues came back French.
+    url.searchParams.set("lang", LANG);
 
     const res = await fetch(url.toString(), {
       headers: {
@@ -65,30 +68,53 @@ export async function fetchProviderSections(provider?: string): Promise<Provider
   }
 }
 
+const MAX_HOPS = 4;
+
 /**
  * Turn a provider catalogue entry into a local slug.
  *
  * Provider items are addressed by `provider` + `book_id`, not by slug — the
- * site's /search/import route 302s to the real /detail/watch/<slug>, which is
- * what info() and watch() need. Only the redirect is read; the body is not
- * followed, so this stays a single cheap request.
+ * site's /search/import route redirects to the real /detail/watch/<slug>,
+ * which is what info() and watch() need.
+ *
+ * The resolved slug is identical in every locale (`lang` only changes how the
+ * page renders), so a series keeps its identity whatever language it was
+ * imported under.
  */
 export async function resolveImportSlug(provider: string, bookId: string): Promise<string | null> {
   try {
     const url = new URL(`${nartodrama}/search/import`);
     url.searchParams.set("provider", provider);
     url.searchParams.set("book_id", bookId);
-    url.searchParams.set("lang", "en-US");
-    url.searchParams.set("target_lang", "en-US");
+    url.searchParams.set("lang", LANG);
+    url.searchParams.set("target_lang", LANG);
 
-    const res = await fetch(url.toString(), {
-      redirect: "manual",
-      headers: { "User-Agent": UA, Accept: "text/html" },
-    });
+    // TWO hops are needed: /search/import first 302s to an intermediate
+    // /detail/dummy/<provider>/<bookId>/<ep>, and only that one answers with
+    // the slug. Reading a single manual redirect always came back empty, which
+    // silently broke importing anything found through a provider catalogue.
+    // Hops are followed by hand rather than with `redirect: "follow"` so the
+    // final HTML body is never downloaded - only headers are needed.
+    let next: string | null = url.toString();
 
-    const location = res.headers.get("location") || "";
-    const slug = location.match(/\/detail\/watch\/([^/?#]+)/)?.[1];
-    return slug ?? null;
+    for (let hop = 0; hop < MAX_HOPS && next; hop++) {
+      const res: Response = await fetch(next, {
+        redirect: "manual",
+        headers: { "User-Agent": UA, Accept: "text/html" },
+      });
+
+      const location: string = res.headers.get("location") || "";
+      if (!location) break;
+
+      const slug = location.match(/\/detail\/watch\/([^/?#]+)/)?.[1];
+      if (slug) return slug;
+
+      // Relative Location headers are legal; resolve against the hop we made.
+      next = new URL(location, next).toString();
+    }
+
+    Logger.warn(`nartodrama: could not resolve ${provider}/${bookId} to a slug`);
+    return null;
   } catch (err) {
     Logger.error(err);
     return null;

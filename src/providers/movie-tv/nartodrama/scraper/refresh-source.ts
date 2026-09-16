@@ -7,6 +7,14 @@ import type { RefreshSource } from "../types.js";
 export const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+// Upstream localizes every catalogue by session locale, and it picks that
+// locale from the *caller's IP* on first contact - so the identical request
+// answers in English from one host and French from the VPS. `?lang=` overrides
+// the geo guess and pins the session for later requests, so every call that can
+// carry it does. Changing this one value changes the language of the whole
+// scrape; upstream offers 22 locales.
+export const LANG = "en-US";
+
 /**
  * Pull a `const <name> = "...";` string literal out of the inline player script.
  * The values are PHP-escaped JSON strings (`https:\/\/...`), so they are decoded
@@ -147,7 +155,7 @@ export interface WatchPageContext {
 }
 
 export function watchUrl(slug: string, episode: number) {
-  return `${nartodrama}/detail/watch/${slug}/${Math.max(1, episode)}?lang=en-US`;
+  return `${nartodrama}/detail/watch/${slug}/${Math.max(1, episode)}?lang=${LANG}`;
 }
 
 export async function fetchWatchPage(
@@ -164,7 +172,7 @@ export async function fetchWatchPage(
     html,
     refreshBase:
       readScriptString(html, "refreshSourceBaseUrl") ||
-      `${nartodrama}/detail/watch/${slug}?lang=en-US`,
+      `${nartodrama}/detail/watch/${slug}?lang=${LANG}`,
     contextToken: readScriptString(html, "refreshSourceContextToken"),
     edgeBase: readScriptString(html, "refreshSourceEdgeBase") || nartodrama_edge,
     app: readScriptString(html, "movieSourceAppName"),

@@ -11,9 +11,28 @@ export const UA =
 // locale from the *caller's IP* on first contact - so the identical request
 // answers in English from one host and French from the VPS. `?lang=` overrides
 // the geo guess and pins the session for later requests, so every call that can
-// carry it does. Changing this one value changes the language of the whole
-// scrape; upstream offers 22 locales.
+// carry it does.
+//
+// This is the DEFAULT, not the only option: every entry point takes a `lang`
+// argument and callers may ask for another locale. Upstream advertises 22, but
+// only nine carry their own catalogue — en-US, it-IT, de-DE, pt-PT, pl-PL,
+// fr-FR, es-ES, ru-RU and tr-TR. The other thirteen (id-ID, ja-JP, ko-KR,
+// zh-TW, th-TH, ar-SA, vi-VN, tl-PH, ms-MY, hi-IN, ta-IN, te-IN, bn-BD) return
+// the English list verbatim, so asking for them is legal but pointless.
 export const LANG = "en-US";
+
+/** Locales that actually have their own catalogue upstream. */
+export const LOCALISED = new Set([
+  "en-US",
+  "it-IT",
+  "de-DE",
+  "pt-PT",
+  "pl-PL",
+  "fr-FR",
+  "es-ES",
+  "ru-RU",
+  "tr-TR",
+]);
 
 /**
  * Pull a `const <name> = "...";` string literal out of the inline player script.
@@ -154,15 +173,16 @@ export interface WatchPageContext {
   episodes: unknown[];
 }
 
-export function watchUrl(slug: string, episode: number) {
-  return `${nartodrama}/detail/watch/${slug}/${Math.max(1, episode)}?lang=${LANG}`;
+export function watchUrl(slug: string, episode: number, lang: string = LANG) {
+  return `${nartodrama}/detail/watch/${slug}/${Math.max(1, episode)}?lang=${lang}`;
 }
 
 export async function fetchWatchPage(
   slug: string,
   episode: number,
+  lang: string = LANG,
 ): Promise<WatchPageContext | null> {
-  const res = await fetchWithRetry(watchUrl(slug, episode), {
+  const res = await fetchWithRetry(watchUrl(slug, episode, lang), {
     headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
   });
   if (!res || !res.ok) return null;
@@ -172,7 +192,7 @@ export async function fetchWatchPage(
     html,
     refreshBase:
       readScriptString(html, "refreshSourceBaseUrl") ||
-      `${nartodrama}/detail/watch/${slug}?lang=${LANG}`,
+      `${nartodrama}/detail/watch/${slug}?lang=${lang}`,
     contextToken: readScriptString(html, "refreshSourceContextToken"),
     edgeBase: readScriptString(html, "refreshSourceEdgeBase") || nartodrama_edge,
     app: readScriptString(html, "movieSourceAppName"),
@@ -208,8 +228,12 @@ function tokenLifetime(token: string | null): number | null {
 export async function getWatchContext(
   slug: string,
   episode: number,
+  lang: string = LANG,
 ): Promise<WatchPageContext | null> {
-  const key = `nartodrama:ctx:${slug}`;
+  // The locale is part of the key. The cached context carries a refreshBase
+  // built from it, so reusing an English context for a French request would
+  // silently serve the wrong locale's stream.
+  const key = `nartodrama:ctx:${lang}:${slug}`;
 
   const cached = await Cache.get(key);
   if (cached) {
@@ -220,7 +244,7 @@ export async function getWatchContext(
     }
   }
 
-  const ctx = await fetchWatchPage(slug, episode);
+  const ctx = await fetchWatchPage(slug, episode, lang);
   if (!ctx) return null;
 
   // Never store the raw HTML.

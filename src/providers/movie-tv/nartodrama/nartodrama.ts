@@ -115,10 +115,14 @@ export class NartoDrama {
     return description.split(" Narto Drama - Watch Short Dramas")[0].trim();
   }
 
-  private static async listing(path: string, page: number): Promise<Paginated<DramaCard>> {
+  private static async listing(
+    path: string,
+    page: number,
+    lang: string = LANG,
+  ): Promise<Paginated<DramaCard>> {
     try {
       const url = new URL(nartodrama + path);
-      url.searchParams.set("lang", LANG);
+      url.searchParams.set("lang", lang);
       if (page > 1) url.searchParams.set("page", String(page));
 
       const $ = await this.fetchHtml(url.toString());
@@ -133,15 +137,19 @@ export class NartoDrama {
     }
   }
 
-  static async home(page = 1) {
-    return this.listing("/", page);
+  static async home(page = 1, lang: string = LANG) {
+    return this.listing("/", page, lang);
   }
 
-  static async search(query: string, page = 1): Promise<Paginated<DramaCard>> {
+  static async search(
+    query: string,
+    page = 1,
+    lang: string = LANG,
+  ): Promise<Paginated<DramaCard>> {
     try {
       const url = new URL(nartodrama + "/search");
       url.searchParams.set("q", query);
-      url.searchParams.set("lang", LANG);
+      url.searchParams.set("lang", lang);
       if (page > 1) url.searchParams.set("page", String(page));
 
       const $ = await this.fetchHtml(url.toString());
@@ -156,12 +164,12 @@ export class NartoDrama {
     }
   }
 
-  static async genre(genre: string, page = 1) {
-    return this.listing(`/genre/${genre}`, page);
+  static async genre(genre: string, page = 1, lang: string = LANG) {
+    return this.listing(`/genre/${genre}`, page, lang);
   }
 
-  static async tag(tag: string, page = 1) {
-    return this.listing(`/tag/${tag}`, page);
+  static async tag(tag: string, page = 1, lang: string = LANG) {
+    return this.listing(`/tag/${tag}`, page, lang);
   }
 
   /** The ~41 upstream apps narto-drama aggregates (iDrama, ReelShort, …). */
@@ -208,10 +216,10 @@ export class NartoDrama {
    * parallel; if the watch page fails the episode list degrades to the plain
    * `a.episode-item` links on the detail page.
    */
-  static async info(slug: string): Promise<DramaInfo | null> {
+  static async info(slug: string, lang: string = LANG): Promise<DramaInfo | null> {
     try {
       const [$, watch] = await Promise.all([
-        this.fetchHtml(`${nartodrama}/detail/watch/${slug}?lang=${LANG}`),
+        this.fetchHtml(`${nartodrama}/detail/watch/${slug}?lang=${lang}`),
         getWatchContext(slug, 1).catch(() => null),
       ]);
 
@@ -282,9 +290,13 @@ export class NartoDrama {
    * when a narto-drama Referer is present — so sources are proxied WITHOUT any
    * forwarded headers. Subtitles go through /proxy/fetch for CORS only.
    */
-  static async watch(slug: string, episode: number): Promise<DramaStream | null> {
+  static async watch(
+    slug: string,
+    episode: number,
+    lang: string = LANG,
+  ): Promise<DramaStream | null> {
     try {
-      const ctx = await getWatchContext(slug, episode);
+      const ctx = await getWatchContext(slug, episode, lang);
       if (!ctx) return null;
 
       const resolved = await resolveSource(ctx, slug, episode);

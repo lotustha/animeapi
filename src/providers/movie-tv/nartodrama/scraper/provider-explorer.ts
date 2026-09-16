@@ -13,13 +13,21 @@ const SECTIONS_URL = `${nartodrama}/home/providers/sections`;
  * Omitting `provider` returns the site default (whichever app is currently
  * promoted) plus the full provider roster, so it doubles as the provider list.
  */
-export async function fetchProviderSections(provider?: string): Promise<ProviderCatalogue | null> {
+export async function fetchProviderSections(
+  provider?: string,
+  lang: string = LANG,
+): Promise<ProviderCatalogue | null> {
   try {
     const url = new URL(SECTIONS_URL);
     if (provider) url.searchParams.set("provider", provider);
     // Without this the endpoint answers in whatever language upstream guessed
     // from the server's IP - the reason imported catalogues came back French.
-    url.searchParams.set("lang", LANG);
+    //
+    // Per request rather than pinned to LANG: a caller asking for one locale
+    // and silently getting another is the whole class of bug this parameter
+    // exists to close. LANG remains the default for callers that have no
+    // opinion.
+    url.searchParams.set("lang", lang);
 
     const res = await fetch(url.toString(), {
       headers: {

@@ -173,8 +173,8 @@ export class NartoDrama {
   }
 
   /** The ~41 upstream apps narto-drama aggregates (iDrama, ReelShort, …). */
-  static async providers(): Promise<UpstreamProvider[]> {
-    const catalogue = await fetchProviderSections();
+  static async providers(lang: string = LANG): Promise<UpstreamProvider[]> {
+    const catalogue = await fetchProviderSections(undefined, lang);
     return catalogue?.providers ?? [];
   }
 
@@ -186,8 +186,11 @@ export class NartoDrama {
    * would serve the wrong catalogue and cache it under the requested name.
    * Treat a mismatch between what was asked for and what came back as a miss.
    */
-  static async providerCatalogue(key: string): Promise<ProviderCatalogue | null> {
-    const catalogue = await fetchProviderSections(key);
+  static async providerCatalogue(
+    key: string,
+    lang: string = LANG,
+  ): Promise<ProviderCatalogue | null> {
+    const catalogue = await fetchProviderSections(key, lang);
     if (!catalogue) return null;
 
     const wanted = key.trim().toLowerCase();

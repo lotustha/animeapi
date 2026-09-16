@@ -220,7 +220,12 @@ export class NartoDrama {
     try {
       const [$, watch] = await Promise.all([
         this.fetchHtml(`${nartodrama}/detail/watch/${slug}?lang=${lang}`),
-        getWatchContext(slug, 1).catch(() => null),
+        // `lang` matters here as much as on the detail page above: the watch
+        // context supplies the whole episode list and the provider key, and
+        // it is cached under a locale-scoped key. Omitting it returned English
+        // episode titles for a Polish request and wrote them into the en-US
+        // cache slot, while watch() next door was passing it correctly.
+        getWatchContext(slug, 1, lang).catch(() => null),
       ]);
 
       const title = $("h1.movie-title").text().trim();

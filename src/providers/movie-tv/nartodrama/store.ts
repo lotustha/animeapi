@@ -53,9 +53,17 @@ function init(): SqliteDb | null {
     const handle = new Database(DB_PATH, { create: true });
     handle.run("PRAGMA journal_mode = WAL");
 
+    // A series is stored PER LOCALE, because upstream returns a different
+    // title, description and episode list for each one. Keyed on slug alone,
+    // a Polish scrape overwrote the row every other locale then read — and
+    // because the caller caches what it reads under its own locale-scoped key,
+    // that Polish metadata got served, and imported, as English.
+    dropLegacySchema(handle);
+
     handle.run(`
       CREATE TABLE IF NOT EXISTS series (
-        slug           TEXT PRIMARY KEY,
+        slug           TEXT NOT NULL,
+        lang           TEXT NOT NULL,
         title          TEXT NOT NULL,
         url            TEXT,
         poster         TEXT,
@@ -63,17 +71,19 @@ function init(): SqliteDb | null {
         tags           TEXT,
         provider       TEXT,
         total_episodes INTEGER,
-        updated_at     INTEGER NOT NULL
+        updated_at     INTEGER NOT NULL,
+        PRIMARY KEY (slug, lang)
       )`);
 
     handle.run(`
       CREATE TABLE IF NOT EXISTS episodes (
         slug        TEXT    NOT NULL,
+        lang        TEXT    NOT NULL,
         number      INTEGER NOT NULL,
         title       TEXT,
         thumbnail   TEXT,
         is_playable INTEGER DEFAULT 1,
-        PRIMARY KEY (slug, number)
+        PRIMARY KEY (slug, lang, number)
       )`);
 
     handle.run("CREATE INDEX IF NOT EXISTS idx_series_title ON series(title)");
@@ -88,26 +98,61 @@ function init(): SqliteDb | null {
   }
 }
 
+/**
+ * Drop the pre-locale tables so they can be recreated with `lang` in the key.
+ *
+ * SQLite cannot add a column to a primary key in place, and this is a cache of
+ * upstream metadata with nothing authoritative in it — everything dropped is
+ * re-scraped on the next request. That is a far better trade than carrying a
+ * schema whose rows cannot say which language they are in.
+ *
+ * Detected by asking for the column rather than tracking a version number:
+ * there is exactly one old shape and one new one, so the column's presence is
+ * the whole question.
+ */
+function dropLegacySchema(handle: SqliteDb): void {
+  try {
+    const columns = handle.query("PRAGMA table_info(series)").all();
+    // No table yet — nothing to migrate, CREATE TABLE will do the work.
+    if (columns.length === 0) return;
+    if (columns.some((c: any) => c.name === "lang")) return;
+
+    Logger.info("nartodrama: store predates per-locale keys — rebuilding cache");
+    handle.run("DROP TABLE IF EXISTS episodes");
+    handle.run("DROP TABLE IF EXISTS series");
+  } catch (err) {
+    Logger.error(err);
+  }
+}
+
 export interface StoredSeries {
   info: DramaInfo;
   stale: boolean;
   updatedAt: number;
 }
 
-/** Read one series. Returns null on a miss, or when the store is unavailable. */
-export function getSeries(slug: string): StoredSeries | null {
+/**
+ * Read one series in one locale.
+ *
+ * A miss in the requested locale is a miss, never a fall back to another one:
+ * answering a Polish request with the English row is what made a locale-scoped
+ * cache serve the wrong language.
+ */
+export function getSeries(slug: string, lang: string): StoredSeries | null {
   const handle = init();
   if (!handle) return null;
 
   try {
-    const row = handle.query("SELECT * FROM series WHERE slug = ?").get(slug);
+    const row = handle
+      .query("SELECT * FROM series WHERE slug = ? AND lang = ?")
+      .get(slug, lang);
     if (!row) return null;
 
     const episodes = handle
       .query(
-        "SELECT number, title, thumbnail, is_playable FROM episodes WHERE slug = ? ORDER BY number",
+        "SELECT number, title, thumbnail, is_playable FROM episodes WHERE slug = ? AND lang = ? ORDER BY number",
       )
-      .all(slug)
+      .all(slug, lang)
       .map(
         (e: any): DramaEpisode => ({
           id: `${slug}$${e.number}`,
@@ -131,6 +176,11 @@ export function getSeries(slug: string): StoredSeries | null {
       info: {
         id: row.slug,
         title: row.title,
+        // Carried through deliberately. Leaving it off is not cosmetic: the
+        // consumer writes it to drama_series.source_app, and an /info answered
+        // from this store — the warm path — reported no provider at all, so a
+        // re-import overwrote a known-good value with NULL.
+        provider: row.provider || "",
         url: row.url || "",
         poster: row.poster || "",
         description: row.description || "",
@@ -145,17 +195,17 @@ export function getSeries(slug: string): StoredSeries | null {
   }
 }
 
-/** Insert or refresh one series and its episode list. */
-export function putSeries(info: DramaInfo, provider = ""): void {
+/** Insert or refresh one series and its episode list, in one locale. */
+export function putSeries(info: DramaInfo, provider = "", lang: string): void {
   const handle = init();
   if (!handle) return;
 
   try {
     handle
       .query(
-        `INSERT INTO series (slug, title, url, poster, description, tags, provider, total_episodes, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(slug) DO UPDATE SET
+        `INSERT INTO series (slug, lang, title, url, poster, description, tags, provider, total_episodes, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(slug, lang) DO UPDATE SET
            title=excluded.title, url=excluded.url, poster=excluded.poster,
            description=excluded.description, tags=excluded.tags,
            provider=excluded.provider, total_episodes=excluded.total_episodes,
@@ -163,6 +213,7 @@ export function putSeries(info: DramaInfo, provider = ""): void {
       )
       .run(
         info.id,
+        lang,
         info.title,
         info.url,
         info.poster,
@@ -174,23 +225,23 @@ export function putSeries(info: DramaInfo, provider = ""): void {
       );
 
     const upsertEpisode = handle.query(
-      `INSERT INTO episodes (slug, number, title, thumbnail, is_playable)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(slug, number) DO UPDATE SET
+      `INSERT INTO episodes (slug, lang, number, title, thumbnail, is_playable)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(slug, lang, number) DO UPDATE SET
          title=excluded.title, thumbnail=excluded.thumbnail,
          is_playable=excluded.is_playable`,
     );
 
     for (const ep of info.episodes ?? []) {
-      upsertEpisode.run(info.id, ep.number, ep.title, ep.thumbnail, ep.isPlayable ? 1 : 0);
+      upsertEpisode.run(info.id, lang, ep.number, ep.title, ep.thumbnail, ep.isPlayable ? 1 : 0);
     }
   } catch (err) {
     Logger.error(err);
   }
 }
 
-/** Search the local catalogue — no upstream request at all. */
-export function searchSeries(query: string, limit = 24, offset = 0) {
+/** Search the local catalogue in one locale — no upstream request at all. */
+export function searchSeries(query: string, limit = 24, offset = 0, lang: string) {
   const handle = init();
   if (!handle) return null;
 
@@ -199,11 +250,11 @@ export function searchSeries(query: string, limit = 24, offset = 0) {
       .query(
         `SELECT slug, title, poster, provider, total_episodes
            FROM series
-          WHERE title LIKE ?
+          WHERE lang = ? AND title LIKE ?
           ORDER BY updated_at DESC
           LIMIT ? OFFSET ?`,
       )
-      .all(`%${query}%`, limit, offset);
+      .all(lang, `%${query}%`, limit, offset);
 
     return rows.map((r: any) => ({
       id: r.slug,

@@ -299,12 +299,63 @@ async function callRefreshSource(
 }
 
 /**
+ * When a signed URL stops working, in unix seconds — if the URL says so itself.
+ *
+ * The provider CDNs sign their links and most of them put the deadline in the
+ * query string in one of three spellings: CloudFront's `Expires=<ts>`, Aliyun's
+ * `auth_key=<ts>-…`, and the Akamai-style token's `exp=<ts>`. Null when the URL
+ * carries none of them, which means "cannot tell", never "does not expire".
+ *
+ * The token form nests it — `?__token__=exp=<ts>~acl=…` — which is why `=` is an
+ * accepted lead-in alongside `?`, `&` and `~`.
+ *
+ * Ten digits exactly: a unix time in seconds. Anything else in those positions
+ * is some other parameter that happens to share a name, and guessing at it
+ * would be worse than not knowing.
+ */
+export function signedUrlExpiry(url: string | null | undefined): number | null {
+  const match = String(url ?? "").match(/[?&~=](?:Expires|auth_key|exp)=(\d{10})(?!\d)/);
+  return match ? Number(match[1]) : null;
+}
+
+/** A minute of grace: a link that dies while the player is opening it is dead. */
+const EXPIRY_MARGIN_SEC = 60;
+
+/**
+ * Whether a refresh-source answer is worth handing to a player.
+ *
+ * "Has a URL" was the whole test, and it is not enough. narto caches what the
+ * provider gave it and goes on serving that answer long after the signature in
+ * it has lapsed — measured on NetShort, the largest source in the catalogue:
+ * `ok: true` with a link that had expired seven weeks earlier, 403 on every
+ * route, while `force=1` on the same episode returned a fresh link that played.
+ * The cached answer LOOKED usable, so the repair rung was never reached and
+ * the episode was simply dead to every viewer.
+ *
+ * The deadline is written in the URL, so checking it costs no request.
+ */
+export function isUsableSource(source: RefreshSource | null, nowSec = Date.now() / 1000): boolean {
+  if (!source?.ok) return false;
+  const urls = [source.direct_play_url, source.play_url].filter(Boolean) as string[];
+  if (urls.length === 0) return false;
+  return !urls.some((url) => {
+    const expiry = signedUrlExpiry(url);
+    return expiry !== null && expiry < nowSec + EXPIRY_MARGIN_SEC;
+  });
+}
+
+/**
  * Resolve the signed stream for one episode.
  *
  * Mirrors the site's own direct → repair ladder: ask for the cached source
  * first, and only spend a `force=1` (which makes narto re-query the upstream
  * provider API) when the cheap call comes back unusable. Always forcing would
  * bypass their cache and hammer the upstream on every request.
+ *
+ * "Unusable" includes a link that has already expired — see [isUsableSource].
+ * The repaired answer is NOT held to that test: by then there is nothing left
+ * to try, and a link this code only suspects is dead is still a better answer
+ * than none if the suspicion is wrong.
  */
 export async function resolveSource(
   ctx: WatchPageContext,
@@ -313,7 +364,8 @@ export async function resolveSource(
 ): Promise<RefreshSource | null> {
   try {
     const cheap = await callRefreshSource(ctx, slug, episode, false);
-    if (cheap?.ok && (cheap.play_url || cheap.direct_play_url)) return cheap;
+    if (isUsableSource(cheap)) return cheap;
+    if (cheap?.ok) Logger.warn(`nartodrama: cached source for ${slug} ep ${episode} has expired — forcing a refresh`);
 
     const repaired = await callRefreshSource(ctx, slug, episode, true);
     if (repaired?.ok && (repaired.play_url || repaired.direct_play_url)) return repaired;

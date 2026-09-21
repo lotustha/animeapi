@@ -356,6 +356,16 @@ export function isUsableSource(source: RefreshSource | null, nowSec = Date.now()
  */
 const recentlyForced = new Map<string, number>();
 const FORCE_COOLDOWN_MS = 10 * 60_000;
+
+/**
+ * How often a player may demand a fresh link for one episode.
+ *
+ * Short, because the request is evidence (the link really did fail for
+ * someone) — but not zero: a client stuck in a retry loop, or a title upstream
+ * cannot re-sign at all, must not become a `force=1` per second against narto.
+ * Inside the window a fresh request is answered like an ordinary one.
+ */
+const FRESH_COOLDOWN_MS = 30_000;
 const PROBE_TIMEOUT_MS = 4000;
 
 /**
@@ -424,8 +434,23 @@ export async function resolveSource(
   ctx: WatchPageContext,
   slug: string,
   episode: number,
+  options: { fresh?: boolean } = {},
 ): Promise<RefreshSource | null> {
   try {
+    // A player reported the last link dead: skip the cached rung altogether.
+    // The probe below can be fooled — a CDN that answers this server but
+    // refuses the viewer, a token that lapses between the probe and the play —
+    // and the viewer's own failed attempt cannot.
+    const tag = `${slug}#${episode}`;
+    const forcedAt = recentlyForced.get(tag);
+    if (options.fresh && !(forcedAt && Date.now() - forcedAt < FRESH_COOLDOWN_MS)) {
+      recentlyForced.set(tag, Date.now());
+      const demanded = await callRefreshSource(ctx, slug, episode, true);
+      if (demanded?.ok && (demanded.play_url || demanded.direct_play_url)) return demanded;
+      // Upstream had nothing new; fall through to the ordinary ladder rather
+      // than answer with nothing.
+    }
+
     const cheap = await callRefreshSource(ctx, slug, episode, false);
     if (isUsableSource(cheap) && !(await isRefusedByCdn(cheap, slug, episode))) return cheap;
     if (cheap?.ok) Logger.warn(`nartodrama: cached source for ${slug} ep ${episode} is dead — forcing a refresh`);

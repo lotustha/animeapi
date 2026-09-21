@@ -302,12 +302,13 @@ export class NartoDrama {
     slug: string,
     episode: number,
     lang: string = LANG,
+    options: { fresh?: boolean } = {},
   ): Promise<DramaStream | null> {
     try {
       const ctx = await getWatchContext(slug, episode, lang);
       if (!ctx) return null;
 
-      const resolved = await resolveSource(ctx, slug, episode);
+      const resolved = await resolveSource(ctx, slug, episode, options);
       if (!resolved) return null;
 
       const primary = resolved.play_url || resolved.direct_play_url || "";

@@ -177,27 +177,128 @@ export function watchUrl(slug: string, episode: number, lang: string = LANG) {
   return `${nartodrama}/detail/watch/${slug}/${Math.max(1, episode)}?lang=${lang}`;
 }
 
+/**
+ * Why there is nothing to play — and the difference is the whole point.
+ *
+ * Every failure in this file used to come back as `null`, and the route turned
+ * `null` into 404 "No sources found". So a rate limit, a slow page and a body
+ * that would not parse were all reported as "this episode does not exist" — the
+ * one answer a player is told not to wait on. Measured from the app side: a
+ * burst of ~50 resolves in two minutes made 17 of 25 providers answer "no
+ * source", and the same episode resolved in 2s a minute later; on a viewer's
+ * tablet the resulting "unavailable" card sat for 1.7 hours until a tap cured it.
+ *
+ *   gone — upstream ANSWERED, and has nothing. Safe to cache, not worth waiting on.
+ *   busy — we could not find out. Never cached; the caller should ask again, and
+ *          `retryAfterSec` says when.
+ */
+export type SourceMiss =
+  | { kind: "gone"; reason: "series-not-found" | "upstream-refused" | "no-url" }
+  | {
+      kind: "busy";
+      reason: "rate-limited" | "fetch-failed" | "upstream-5xx" | "token-refused" | "bad-body" | "exception";
+      retryAfterSec: number;
+    };
+
+export type EdgeAnswer = { kind: "ok"; source: RefreshSource } | SourceMiss;
+
+const RETRY_AFTER_MIN_SEC = 5;
+const RETRY_AFTER_MAX_SEC = 120;
+const RETRY_AFTER_RATE_LIMITED_SEC = 20;
+const RETRY_AFTER_BLIP_SEC = 10;
+
+/** Upstream's own `Retry-After`, in seconds, held to a range a player can use. */
+function retryAfterFrom(header: string | null | undefined, fallback: number): number {
+  const asked = Number(String(header ?? "").trim());
+  const seconds = Number.isFinite(asked) && asked > 0 ? asked : fallback;
+  return Math.min(Math.max(Math.round(seconds), RETRY_AFTER_MIN_SEC), RETRY_AFTER_MAX_SEC);
+}
+
+export const busy = (
+  reason: Extract<SourceMiss, { kind: "busy" }>["reason"],
+  retryAfterSec = RETRY_AFTER_BLIP_SEC,
+): SourceMiss => ({ kind: "busy", reason, retryAfterSec });
+
+/**
+ * Read one edge response. Pure, so every row of this table is pinned by a test.
+ *
+ * `body` is the parsed JSON, or `undefined` when it would not parse — an HTML
+ * challenge page on a 200 is "could not find out", not "nothing there".
+ * `retryable` has been in the schema all along; nothing read it.
+ */
+export function classifyEdgeResponse(
+  status: number,
+  body: unknown,
+  retryAfter?: string | null,
+): EdgeAnswer {
+  if (status === 429) return busy("rate-limited", retryAfterFrom(retryAfter, RETRY_AFTER_RATE_LIMITED_SEC));
+  if (status >= 500) return busy("upstream-5xx", retryAfterFrom(retryAfter, RETRY_AFTER_BLIP_SEC));
+  if (status === 401 || status === 403) return busy("token-refused");
+  if (status === 404) return { kind: "gone", reason: "upstream-refused" };
+
+  const parsed = refreshSourceSchema.safeParse(body);
+  if (!parsed.success) return busy("bad-body");
+
+  const source = parsed.data;
+  if (!source.ok) {
+    return source.retryable === true
+      ? busy("upstream-5xx", retryAfterFrom(retryAfter, RETRY_AFTER_BLIP_SEC))
+      : { kind: "gone", reason: "upstream-refused" };
+  }
+  if (!source.play_url && !source.direct_play_url) return { kind: "gone", reason: "no-url" };
+  return { kind: "ok", source };
+}
+
+/**
+ * The verdict when no rung produced a link: the LAST rung asked decides.
+ *
+ * "Gone" has to be something upstream said, most recently. A cheap rung that
+ * said "nothing" followed by a forced rung that could not be reached is not
+ * knowledge that the episode is gone — it is a failed attempt to check.
+ */
+export function missVerdict(rungs: EdgeAnswer[]): SourceMiss {
+  const last = [...rungs].reverse().find((r): r is SourceMiss => r.kind !== "ok");
+  return last ?? busy("exception");
+}
+
+/** The watch page, or why not. A 404 is the series being gone; anything else is not knowing. */
+async function fetchWatchPageAnswer(
+  slug: string,
+  episode: number,
+  lang: string,
+): Promise<{ ctx: WatchPageContext } | { miss: SourceMiss }> {
+  const res = await fetchWithRetry(watchUrl(slug, episode, lang), {
+    headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
+  });
+  if (!res) return { miss: busy("fetch-failed") };
+  if (res.status === 404) return { miss: { kind: "gone", reason: "series-not-found" } };
+  if (res.status === 429) {
+    return { miss: busy("rate-limited", retryAfterFrom(res.headers.get("retry-after"), RETRY_AFTER_RATE_LIMITED_SEC)) };
+  }
+  if (!res.ok) return { miss: busy(res.status >= 500 ? "upstream-5xx" : "token-refused") };
+
+  const html = await res.text();
+  return {
+    ctx: {
+      html,
+      refreshBase:
+        readScriptString(html, "refreshSourceBaseUrl") ||
+        `${nartodrama}/detail/watch/${slug}?lang=${lang}`,
+      contextToken: readScriptString(html, "refreshSourceContextToken"),
+      edgeBase: readScriptString(html, "refreshSourceEdgeBase") || nartodrama_edge,
+      app: readScriptString(html, "movieSourceAppName"),
+      episodes: readEpisodeItems(html),
+    },
+  };
+}
+
 export async function fetchWatchPage(
   slug: string,
   episode: number,
   lang: string = LANG,
 ): Promise<WatchPageContext | null> {
-  const res = await fetchWithRetry(watchUrl(slug, episode, lang), {
-    headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
-  });
-  if (!res || !res.ok) return null;
-
-  const html = await res.text();
-  return {
-    html,
-    refreshBase:
-      readScriptString(html, "refreshSourceBaseUrl") ||
-      `${nartodrama}/detail/watch/${slug}?lang=${lang}`,
-    contextToken: readScriptString(html, "refreshSourceContextToken"),
-    edgeBase: readScriptString(html, "refreshSourceEdgeBase") || nartodrama_edge,
-    app: readScriptString(html, "movieSourceAppName"),
-    episodes: readEpisodeItems(html),
-  };
+  const answer = await fetchWatchPageAnswer(slug, episode, lang);
+  return "ctx" in answer ? answer.ctx : null;
 }
 
 /** Seconds until the rs_ctx token expires, or null if it can't be read. */
@@ -230,22 +331,47 @@ export async function getWatchContext(
   episode: number,
   lang: string = LANG,
 ): Promise<WatchPageContext | null> {
-  // The locale is part of the key. The cached context carries a refreshBase
-  // built from it, so reusing an English context for a French request would
-  // silently serve the wrong locale's stream.
-  const key = `nartodrama:ctx:${lang}:${slug}`;
+  const answer = await getWatchContextResult(slug, episode, lang);
+  return "ctx" in answer ? answer.ctx : null;
+}
+
+// The locale is part of the key. The cached context carries a refreshBase
+// built from it, so reusing an English context for a French request would
+// silently serve the wrong locale's stream.
+const contextKey = (slug: string, lang: string) => `nartodrama:ctx:${lang}:${slug}`;
+
+/**
+ * Drop a cached context whose token the edge has stopped accepting.
+ *
+ * The context is kept for up to six hours on the strength of the token's own
+ * expiry, but upstream rotates tokens early sometimes. Without this a refused
+ * token would be "busy" on every retry until the cache let go of it — the
+ * caller asking again, as told, and getting the same refusal each time.
+ */
+export function forgetWatchContext(slug: string, lang: string = LANG) {
+  return Cache.purgeSingle(contextKey(slug, lang));
+}
+
+/** [getWatchContext], but saying WHY when there is none. See [SourceMiss]. */
+export async function getWatchContextResult(
+  slug: string,
+  episode: number,
+  lang: string = LANG,
+): Promise<{ ctx: WatchPageContext } | { miss: SourceMiss }> {
+  const key = contextKey(slug, lang);
 
   const cached = await Cache.get(key);
   if (cached) {
     try {
-      return JSON.parse(cached) as WatchPageContext;
+      return { ctx: JSON.parse(cached) as WatchPageContext };
     } catch {
       /* corrupt entry — fall through and refetch */
     }
   }
 
-  const ctx = await fetchWatchPage(slug, episode, lang);
-  if (!ctx) return null;
+  const answer = await fetchWatchPageAnswer(slug, episode, lang);
+  if (!("ctx" in answer)) return answer;
+  const { ctx } = answer;
 
   // Never store the raw HTML.
   const { html: _html, ...storable } = ctx;
@@ -253,7 +379,7 @@ export async function getWatchContext(
   const ttl = Math.min(lifetime ? lifetime - 300 : 1800, 21600);
   if (ttl > 60) Cache.set(key, JSON.stringify(storable), ttl);
 
-  return ctx;
+  return answer;
 }
 
 /**
@@ -276,7 +402,7 @@ async function callRefreshSource(
   slug: string,
   episode: number,
   force: boolean,
-): Promise<RefreshSource | null> {
+): Promise<EdgeAnswer> {
   const res = await fetchWithRetry(buildEdgeUrl(ctx, episode, force), {
     headers: {
       "User-Agent": UA,
@@ -285,17 +411,16 @@ async function callRefreshSource(
       Referer: watchUrl(slug, episode),
     },
   });
-  if (!res) return null;
+  if (!res) return busy("fetch-failed");
 
   let json: unknown;
   try {
     json = await res.json();
   } catch {
-    return null;
+    json = undefined;
   }
 
-  const parsed = refreshSourceSchema.safeParse(json);
-  return parsed.success ? parsed.data : null;
+  return classifyEdgeResponse(res.status, json, res.headers.get("retry-after"));
 }
 
 /**
@@ -436,6 +561,29 @@ export async function resolveSource(
   episode: number,
   options: { fresh?: boolean } = {},
 ): Promise<RefreshSource | null> {
+  const answer = await resolveSourceResult(ctx, slug, episode, options);
+  return answer.kind === "ok" ? answer.source : null;
+}
+
+const isRateLimited = (answer: EdgeAnswer) => answer.kind === "busy" && answer.reason === "rate-limited";
+
+/**
+ * [resolveSource], but saying WHY when there is no link. See [SourceMiss].
+ *
+ * One rule is new rather than renamed: A RATE-LIMITED RUNG ENDS THE LADDER. The
+ * rungs used to be told apart only by "got a link" and "did not", so a 429 on
+ * the cheap call looked like a dead cache entry and was answered with a forced
+ * call — a second request, and the expensive kind, at the exact moment upstream
+ * had asked for fewer. Under a burst that doubled the load that caused it.
+ */
+export async function resolveSourceResult(
+  ctx: WatchPageContext,
+  slug: string,
+  episode: number,
+  options: { fresh?: boolean } = {},
+  call: typeof callRefreshSource = callRefreshSource,
+): Promise<EdgeAnswer> {
+  const rungs: EdgeAnswer[] = [];
   try {
     // A player reported the last link dead: skip the cached rung altogether.
     // The probe below can be fooled — a CDN that answers this server but
@@ -445,24 +593,31 @@ export async function resolveSource(
     const forcedAt = recentlyForced.get(tag);
     if (options.fresh && !(forcedAt && Date.now() - forcedAt < FRESH_COOLDOWN_MS)) {
       recentlyForced.set(tag, Date.now());
-      const demanded = await callRefreshSource(ctx, slug, episode, true);
-      if (demanded?.ok && (demanded.play_url || demanded.direct_play_url)) return demanded;
+      const demanded = await call(ctx, slug, episode, true);
+      if (demanded.kind === "ok") return demanded;
+      if (isRateLimited(demanded)) return demanded;
+      rungs.push(demanded);
       // Upstream had nothing new; fall through to the ordinary ladder rather
       // than answer with nothing.
     }
 
-    const cheap = await callRefreshSource(ctx, slug, episode, false);
-    if (isUsableSource(cheap) && !(await isRefusedByCdn(cheap, slug, episode))) return cheap;
-    if (cheap?.ok) Logger.warn(`nartodrama: cached source for ${slug} ep ${episode} is dead — forcing a refresh`);
-    recentlyForced.set(`${slug}#${episode}`, Date.now());
+    const cheap = await call(ctx, slug, episode, false);
+    const cached = cheap.kind === "ok" ? cheap.source : null;
+    if (isUsableSource(cached) && !(await isRefusedByCdn(cached, slug, episode))) return cheap;
+    if (isRateLimited(cheap)) return cheap;
+    rungs.push(cheap);
+    if (cached) Logger.warn(`nartodrama: cached source for ${slug} ep ${episode} is dead — forcing a refresh`);
+    recentlyForced.set(tag, Date.now());
 
-    const repaired = await callRefreshSource(ctx, slug, episode, true);
-    if (repaired?.ok && (repaired.play_url || repaired.direct_play_url)) return repaired;
+    const repaired = await call(ctx, slug, episode, true);
+    if (repaired.kind === "ok") return repaired;
+    rungs.push(repaired);
 
-    Logger.warn(`nartodrama: no source for ${slug} ep ${episode}`);
-    return null;
+    const verdict = missVerdict(rungs);
+    Logger.warn(`nartodrama: no source for ${slug} ep ${episode} — ${verdict.kind} (${verdict.reason})`);
+    return verdict;
   } catch (err) {
     Logger.error(err);
-    return null;
+    return busy("exception");
   }
 }

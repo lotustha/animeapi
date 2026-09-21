@@ -345,6 +345,69 @@ export function isUsableSource(source: RefreshSource | null, nowSec = Date.now()
 }
 
 /**
+ * Episodes force-refreshed lately, by `slug#episode` → when.
+ *
+ * The brake on [isRefusedByCdn]. A probe that keeps failing for a reason a
+ * refresh cannot cure — this server geo-blocked by a CDN that serves viewers
+ * fine — would otherwise turn every request for that episode into a `force=1`
+ * against narto, which is exactly the hammering the cheap-first ladder exists
+ * to avoid. One forced refresh per episode per window; after that the cached
+ * answer is trusted again and the viewer's own connection decides.
+ */
+const recentlyForced = new Map<string, number>();
+const FORCE_COOLDOWN_MS = 10 * 60_000;
+const PROBE_TIMEOUT_MS = 4000;
+
+/**
+ * Whether the CDN refuses the link in a cached answer — for links that do not
+ * say when they expire.
+ *
+ * [isUsableSource] reads the deadline out of the URL, which costs nothing, but
+ * some providers sign with an opaque token that carries no readable date.
+ * Melolo is one: its cached link answered `410 melolo-edge: link expired`
+ * while `force=1` on the same episode returned one that played (measured from
+ * outside the VPS, so not the geo-block this file elsewhere attributes 410s
+ * to). For those the only way to know is to ask, so this spends one ranged
+ * request for a single byte.
+ *
+ * Deliberately narrow:
+ *  - skipped when any URL carries a readable deadline — that case is already
+ *    decided, for free;
+ *  - only 401/403/410 count. A timeout, a 5xx or a network error is "could not
+ *    tell", and not knowing is not a reason to bypass narto's cache;
+ *  - skipped for an episode forced within [FORCE_COOLDOWN_MS].
+ */
+async function isRefusedByCdn(source: RefreshSource | null, slug: string, episode: number): Promise<boolean> {
+  const urls = [source?.direct_play_url, source?.play_url].filter(Boolean) as string[];
+  if (urls.some((url) => signedUrlExpiry(url) !== null)) return false;
+
+  const url = urls.find((u) => /^https?:\/\//i.test(u));
+  if (!url) return false;
+
+  const forcedAt = recentlyForced.get(`${slug}#${episode}`);
+  if (forcedAt && Date.now() - forcedAt < FORCE_COOLDOWN_MS) return false;
+  // Bounded: entries are only useful for the cooldown, so drop the stale ones
+  // whenever the map has grown rather than on a timer nobody would maintain.
+  if (recentlyForced.size > 2000) {
+    for (const [key, at] of recentlyForced) {
+      if (Date.now() - at >= FORCE_COOLDOWN_MS) recentlyForced.delete(key);
+    }
+  }
+
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": UA, Range: "bytes=0-0" },
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+    // The body is not wanted; do not leave the connection holding it.
+    void res.body?.cancel().catch(() => {});
+    return res.status === 401 || res.status === 403 || res.status === 410;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve the signed stream for one episode.
  *
  * Mirrors the site's own direct → repair ladder: ask for the cached source
@@ -364,8 +427,9 @@ export async function resolveSource(
 ): Promise<RefreshSource | null> {
   try {
     const cheap = await callRefreshSource(ctx, slug, episode, false);
-    if (isUsableSource(cheap)) return cheap;
-    if (cheap?.ok) Logger.warn(`nartodrama: cached source for ${slug} ep ${episode} has expired — forcing a refresh`);
+    if (isUsableSource(cheap) && !(await isRefusedByCdn(cheap, slug, episode))) return cheap;
+    if (cheap?.ok) Logger.warn(`nartodrama: cached source for ${slug} ep ${episode} is dead — forcing a refresh`);
+    recentlyForced.set(`${slug}#${episode}`, Date.now());
 
     const repaired = await callRefreshSource(ctx, slug, episode, true);
     if (repaired?.ok && (repaired.play_url || repaired.direct_play_url)) return repaired;

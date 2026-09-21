@@ -7,11 +7,15 @@ import {
   LANG,
   UA,
   absoluteUrl,
+  busy,
+  forgetWatchContext,
   getWatchContext,
+  getWatchContextResult,
   isHlsSource,
-  resolveSource,
+  resolveSourceResult,
   servesDirect,
 } from "./scraper/refresh-source.js";
+import type { SourceMiss } from "./scraper/refresh-source.js";
 import { fetchProviderSections, resolveImportSlug } from "./scraper/provider-explorer.js";
 
 import type {
@@ -304,12 +308,37 @@ export class NartoDrama {
     lang: string = LANG,
     options: { fresh?: boolean } = {},
   ): Promise<DramaStream | null> {
-    try {
-      const ctx = await getWatchContext(slug, episode, lang);
-      if (!ctx) return null;
+    const result = await this.watchResult(slug, episode, lang, options);
+    return "kind" in result ? null : result;
+  }
 
-      const resolved = await resolveSource(ctx, slug, episode, options);
-      if (!resolved) return null;
+  /**
+   * [watch], but saying WHY when there is nothing to play.
+   *
+   * The route needs the difference: "gone" is a 404 it may cache, "busy" is a
+   * 503 it must not. See [SourceMiss] for what conflating them cost.
+   */
+  static async watchResult(
+    slug: string,
+    episode: number,
+    lang: string = LANG,
+    options: { fresh?: boolean } = {},
+  ): Promise<DramaStream | SourceMiss> {
+    try {
+      const page = await getWatchContextResult(slug, episode, lang);
+      if (!("ctx" in page)) return page.miss;
+      const ctx = page.ctx;
+
+      const answer = await resolveSourceResult(ctx, slug, episode, options);
+      if (answer.kind !== "ok") {
+        // The edge stopped accepting the token this context carries. Let go of
+        // the context so the retry we are about to invite fetches a new one.
+        if (answer.kind === "busy" && answer.reason === "token-refused") {
+          void forgetWatchContext(slug, lang);
+        }
+        return answer;
+      }
+      const resolved = answer.source;
 
       const primary = resolved.play_url || resolved.direct_play_url || "";
       const sources: DramaSource[] = [];
@@ -342,7 +371,7 @@ export class NartoDrama {
         if (res.stream_url) push(res.stream_url, res.label || "auto");
       }
 
-      if (sources.length === 0) return null;
+      if (sources.length === 0) return { kind: "gone", reason: "no-url" };
 
       const subtitles: DramaSubtitle[] = [];
       const subSeen = new Set<string>();
@@ -369,7 +398,7 @@ export class NartoDrama {
       };
     } catch (err) {
       Logger.error(err);
-      return null;
+      return busy("exception");
     }
   }
 }

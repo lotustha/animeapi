@@ -137,6 +137,23 @@ export const atsuRoutes = new Elysia({ prefix: "/atsu" })
   })
 
   // ─── Discovery & Filters Endpoints ───
+  .get("/search", async ({ request, query, set }) => {
+    if (!query.q) return err(set, 400, "q query parameter is required");
+    const toInt = (value: unknown, fallback: number, max: number) => {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+      return Math.min(Math.floor(parsed), max);
+    };
+    const data = await atsu.search(
+      query.q as string,
+      getBaseUrl(request),
+      toInt(query.page, 1, 1000),
+      toInt(query.limit, 25, 100),
+      query.adult === "1" || query.adult === "true",
+    );
+    if (data.error) return err(set, 500, data.error);
+    return ok(data);
+  })
   .get("/filters", async ({ set }) => {
     const data = await atsu.fetchFilters();
     if (data.error) return err(set, 500, data.error);

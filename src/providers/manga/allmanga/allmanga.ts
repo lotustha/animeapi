@@ -315,56 +315,46 @@ export class AllMangaParser {
 
   async parseDetail(id: string, baseApiUrl: string): Promise<Record<string, unknown>> {
     try {
+      // The site's own detail query. The old code read the manga off `chapterPages`,
+      // which upstream now gates behind a browser-only crypto handshake — every title
+      // came back "Manga not found". This query needs no handshake.
       const variables = {
-        mangaId: id,
-        translationType: "sub",
-        chapterString: "1",
-        limit: 1,
-        offset: 0,
+        _id: id,
+        search: { allowAdult: false, allowUnknown: false },
       };
-      const hash = "a062f1b131dae3d17c1950fad14640d066b988ac10347ed49cfbe70f5e7f661b";
+      const hash = "d77781dcf964b97aea0be621dbde430e89e200b58526823ee6010dd11c3ca96a";
       const data = await this.apqRequest(variables, hash);
 
-      const mangaInfo = data?.data?.chapterPages?.manga;
+      const mangaInfo = data?.data?.manga;
       if (!mangaInfo) throw new Error("Manga not found");
 
-      const pageUrl = `${BASE_URL}/manga/${id}`;
-      const pageHtml = await this.http.get(pageUrl).then((res) => res.data);
+      const coverUrl = proxyImage(mangaInfo.thumbnail, baseApiUrl);
 
-      const descMatch = pageHtml.match(/<div class="article-description">([\s\S]*?)<\/div>/);
-      const description = descMatch ? cleanText(descMatch[1]) : "";
-
-      const coverMatch = pageHtml.match(/<meta[^>]*property="og:image"[^>]*content="([^"]*)"/i);
-      const rawCover = coverMatch ? coverMatch[1] : mangaInfo.thumbnail;
-      const coverUrl = proxyImage(rawCover, baseApiUrl);
-
-      const genreMatches = Array.from(pageHtml.matchAll(/href="\/search-manga\?genres=([^"]+)"/g));
-      const rawGenres = [...new Set(genreMatches.map((m: any) => decodeURIComponent(m[1])))];
-      const genresArray = rawGenres.map((g) => ({
+      const genresArray = (mangaInfo.genres || []).map((g: string) => ({
         genre: cleanText(g),
         slug: g,
       }));
 
-      const authorMatches = Array.from(
-        pageHtml.matchAll(/href="\/search-manga\?authors=([^"]+)"/g),
-      );
-      const rawAuthors = [...new Set(authorMatches.map((m: any) => decodeURIComponent(m[1])))];
-      const authorsArray = rawAuthors.map((a) => ({
+      const authorsArray = (mangaInfo.authors || []).map((a: string) => ({
         author: cleanText(a),
         slug: a,
       }));
 
       const totalSub = mangaInfo.availableChapters?.sub || 0;
 
-      const chapterList = Array.from({ length: totalSub }, (_, i) => {
-        const chapterNumber = totalSub - i;
-        return {
-          id: `${id}:sub:${chapterNumber}`,
-          number: chapterNumber,
-          title: `Chapter ${chapterNumber}`,
-          lang: "sub",
-        };
-      });
+      // Real chapter strings, not a 1..n guess — upstream numbering has gaps and
+      // decimals ("0", "1.1", "1090.5") that a generated range never matches.
+      const subChapters: string[] = mangaInfo.availableChaptersDetail?.sub || [];
+      const chapterList = (
+        subChapters.length
+          ? subChapters
+          : Array.from({ length: totalSub }, (_, i) => String(totalSub - i))
+      ).map((chapterString) => ({
+        id: `${id}:sub:${chapterString}`,
+        number: Number(chapterString),
+        title: `Chapter ${chapterString}`,
+        lang: "sub",
+      }));
 
       return {
         provider: "AllManga",
@@ -372,11 +362,19 @@ export class AllMangaParser {
         title: cleanText(mangaInfo.name),
         englishTitle: cleanText(mangaInfo.englishName),
         nativeTitle: cleanText(mangaInfo.nativeName),
+        altTitles: mangaInfo.altNames || [],
         cover: coverUrl,
-        description: description,
+        banner: mangaInfo.banner || null,
+        description: cleanText(mangaInfo.description || ""),
         genres: genresArray,
         authors: authorsArray,
-        status: pageHtml.includes("Status:</dt>") ? "Ongoing" : "Unknown",
+        tags: mangaInfo.tags || [],
+        type: mangaInfo.type || null,
+        magazine: mangaInfo.magazine || null,
+        countryOfOrigin: mangaInfo.countryOfOrigin || null,
+        score: mangaInfo.score ?? null,
+        averageScore: mangaInfo.averageScore ?? null,
+        status: mangaInfo.status || "Unknown",
         totalChapters: totalSub,
         rawChapters: mangaInfo.availableChapters?.raw || 0,
         airedStart: mangaInfo.airedStart,
@@ -404,6 +402,19 @@ export class AllMangaParser {
       };
       const hash = "a062f1b131dae3d17c1950fad14640d066b988ac10347ed49cfbe70f5e7f661b";
       const data = await this.apqRequest(variables, hash);
+
+      // Upstream gated `chapterPages` behind a rotating browser-only crypto
+      // handshake (x-build-id / x-aa-boot, issued after a Cloudflare Turnstile on
+      // the reader domain). Say so instead of reporting an empty chapter.
+      const gated = (data?.errors || []).find((e: any) =>
+        String(e?.extensions?.code || e?.message || "").startsWith("AA_CRYPTO"),
+      );
+      if (gated) {
+        throw new Error(
+          `AllManga blocked chapter pages (${gated.extensions?.code || gated.message}) — ` +
+            `upstream now requires a browser-issued token for reading`,
+        );
+      }
 
       const edges = data?.data?.chapterPages?.edges || [];
       if (!edges.length) throw new Error("Chapter pages not found");

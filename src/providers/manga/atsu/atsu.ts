@@ -227,6 +227,58 @@ export class AtsuParser {
     }
   }
 
+  /**
+   * Text search. Upstream is a Typesense index, so `q` needs a companion
+   * `query_by` naming the fields to match against, and the response is a bare
+   * `{ hits: [{ document }] }` — no total, no page echo.
+   */
+  async search(
+    query: string,
+    baseApiUrl: string,
+    page: number = 1,
+    perPage: number = 25,
+    isAdult: boolean = false,
+  ): Promise<any> {
+    try {
+      const params = new URLSearchParams({
+        q: query,
+        query_by: "title,otherNames,acronyms,authors",
+        page: String(page),
+        per_page: String(perPage),
+      });
+      if (isAdult) params.set("adult", "1");
+
+      const { data } = await this.http.get(`/api/search/manga?${params.toString()}`);
+      const hits: any[] = data?.hits || [];
+
+      const results = hits
+        .map((hit) => hit?.document)
+        .filter((doc: any) => doc && !doc.hidden)
+        .map((doc: any) => ({
+          id: doc.id,
+          title: doc.title,
+          thumbnail: proxyAtsuImage(doc.poster, baseApiUrl),
+          images: {
+            small: proxyAtsuImage(doc.posterSmall, baseApiUrl),
+            medium: proxyAtsuImage(doc.posterMedium, baseApiUrl),
+            large: proxyAtsuImage(doc.poster, baseApiUrl),
+          },
+          type: doc.type,
+          status: doc.status ?? null,
+          year: doc.year ?? null,
+          authors: doc.authors || [],
+          altTitles: doc.otherNames || [],
+          chapterCount: doc.chapterCount ?? 0,
+          rating: doc.mbRating ?? null,
+          isAdult: doc.isAdult ?? false,
+        }));
+
+      return { provider: "Atsu", query, page, results };
+    } catch (err: any) {
+      return { error: err.message };
+    }
+  }
+
   async fetchFilters(): Promise<any> {
     try {
       const { data } = await this.http.get("/api/explore/availableFilters");

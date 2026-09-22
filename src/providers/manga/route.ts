@@ -60,6 +60,7 @@ export const mangaRoutes = new Elysia({ prefix: "/manga" })
             "GET /manga/atsu/recently-added     → Recently added titles (?page=0&types=Manga,Manwha)",
             "",
             "--- DISCOVERY & FILTERS ---",
+            "GET /manga/atsu/search             → Search titles by name (?q=query&page=1&limit=25&adult=0)",
             "GET /manga/atsu/filters            → List all valid Genre/Type/Status slugs",
             "GET /manga/atsu/explore            → Filtered search (?genres=ID&types=ID&statuses=ID&page=0)",
             "GET /manga/atsu/genre/:slug        → Browse titles by genre ID (?page=0)",

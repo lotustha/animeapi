@@ -16,6 +16,11 @@ import {
   servesDirect,
 } from "./scraper/refresh-source.js";
 import type { SourceMiss } from "./scraper/refresh-source.js";
+import {
+  duplicateOfPrevious,
+  fileKeys,
+  rememberEpisodeFiles,
+} from "./scraper/duplicate-episode.js";
 import { fetchProviderSections, resolveImportSlug } from "./scraper/provider-explorer.js";
 
 import type {
@@ -339,6 +344,18 @@ export class NartoDrama {
         return answer;
       }
       const resolved = answer.source;
+
+      // After the ladder, whichever rung answered: a forced refresh hands back
+      // the same repeated file, so it is checked here and not per rung. The
+      // keys are remembered even for a copy, so a third identical episode is
+      // caught against this one.
+      const keys = fileKeys([resolved.play_url, resolved.direct_play_url]);
+      const repeats = duplicateOfPrevious(slug, episode, keys, ctx.episodes);
+      rememberEpisodeFiles(slug, episode, keys);
+      if (repeats !== null) {
+        Logger.warn(`nartodrama: ${slug} ep ${episode} is the same file as ep ${repeats} — withheld`);
+        return { kind: "gone", reason: "duplicate" };
+      }
 
       const primary = resolved.play_url || resolved.direct_play_url || "";
       const sources: DramaSource[] = [];

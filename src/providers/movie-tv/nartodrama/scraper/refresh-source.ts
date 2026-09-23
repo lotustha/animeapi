@@ -193,7 +193,12 @@ export function watchUrl(slug: string, episode: number, lang: string = LANG) {
  *          `retryAfterSec` says when.
  */
 export type SourceMiss =
-  | { kind: "gone"; reason: "series-not-found" | "upstream-refused" | "no-url" }
+  | {
+      kind: "gone";
+      // `duplicate`: upstream gave this episode the previous episode's file.
+      // See duplicate-episode.ts.
+      reason: "series-not-found" | "upstream-refused" | "no-url" | "duplicate";
+    }
   | {
       kind: "busy";
       reason: "rate-limited" | "fetch-failed" | "upstream-5xx" | "token-refused" | "bad-body" | "exception";

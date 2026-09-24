@@ -3,6 +3,7 @@ import { nartodrama } from "../../../origins.js";
 import { providerSectionsSchema } from "../types.js";
 import { LANG, UA } from "./refresh-source.js";
 import { browserCheckCookie } from "./browser-check.js";
+import { collectTabPages } from "./catalogue-pages.js";
 
 import type { ProviderCatalogue, ProviderItem, ProviderSection } from "../types.js";
 
@@ -17,10 +18,16 @@ const SECTIONS_URL = `${nartodrama}/home/providers/sections`;
 export async function fetchProviderSections(
   provider?: string,
   lang: string = LANG,
+  tabPage?: { tab: string; page: number },
 ): Promise<ProviderCatalogue | null> {
   try {
     const url = new URL(SECTIONS_URL);
     if (provider) url.searchParams.set("provider", provider);
+    // How narto's own page loads more of one tab (see catalogue-pages.ts).
+    if (tabPage) {
+      url.searchParams.set("only_tab", tabPage.tab);
+      url.searchParams.set(`tab_pages[${tabPage.tab}]`, String(tabPage.page));
+    }
     // Without this the endpoint answers in whatever language upstream guessed
     // from the server's IP - the reason imported catalogues came back French.
     //
@@ -36,6 +43,7 @@ export async function fetchProviderSections(
         Accept: "application/json, text/plain, */*",
         "X-Requested-With": "XMLHttpRequest",
         Referer: nartodrama + "/",
+        Cookie: browserCheckCookie(),
       },
     });
     if (!res.ok) return null;
@@ -75,6 +83,34 @@ export async function fetchProviderSections(
     Logger.error(err);
     return null;
   }
+}
+
+/**
+ * A provider's WHOLE catalogue: every tab, every page. [fetchProviderSections]
+ * alone returns page 1 of each tab, 24 titles. Sequential and paced: this is
+ * narto, which also serves every viewer's stream.
+ */
+export async function fetchFullProviderCatalogue(
+  provider: string,
+  lang: string = LANG,
+  { maxPages = 40, pauseMs = 800 }: { maxPages?: number; pauseMs?: number } = {},
+): Promise<ProviderCatalogue | null> {
+  const first = await fetchProviderSections(provider, lang);
+  if (!first) return null;
+  const sections: ProviderSection[] = [];
+  for (const section of first.sections) {
+    const items = await collectTabPages(
+      section.items,
+      async (page) => {
+        const next = await fetchProviderSections(provider, lang, { tab: section.key, page });
+        if (!next) throw new Error("page failed");
+        return next.sections.find((s) => s.key === section.key)?.items ?? [];
+      },
+      { maxPages, pauseMs },
+    );
+    sections.push({ ...section, items });
+  }
+  return { ...first, sections };
 }
 
 const MAX_HOPS = 4;

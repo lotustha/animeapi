@@ -21,7 +21,7 @@ import {
   fileKeys,
   rememberEpisodeFiles,
 } from "./scraper/duplicate-episode.js";
-import { fetchProviderSections, resolveImportSlug } from "./scraper/provider-explorer.js";
+import { fetchFullProviderCatalogue, fetchProviderSections, resolveImportSlug } from "./scraper/provider-explorer.js";
 
 import type {
   DramaCard,
@@ -209,8 +209,11 @@ export class NartoDrama {
   static async providerCatalogue(
     key: string,
     lang: string = LANG,
+    full = false,
   ): Promise<ProviderCatalogue | null> {
-    const catalogue = await fetchProviderSections(key, lang);
+    const catalogue = full
+      ? await fetchFullProviderCatalogue(key, lang)
+      : await fetchProviderSections(key, lang);
     if (!catalogue) return null;
 
     const wanted = key.trim().toLowerCase();

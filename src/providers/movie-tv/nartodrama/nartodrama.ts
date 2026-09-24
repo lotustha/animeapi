@@ -34,16 +34,26 @@ import type {
   ProviderCatalogue,
   UpstreamProvider,
 } from "./types.js";
+import { browserCheckCookie, isBrowserCheck } from "./scraper/browser-check.js";
 
 const EMPTY_PAGE: Paginated<DramaCard> = { currentPage: 1, hasNextPage: false, results: [] };
 
 export class NartoDrama {
   private static async fetchHtml(url: string) {
     const res = await fetch(url, {
-      headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
+      headers: {
+        "User-Agent": UA,
+        Accept: "text/html,application/xhtml+xml",
+        // See browser-check.ts: without it every listing is narto's stub.
+        Cookie: browserCheckCookie(),
+      },
     });
     if (!res.ok) throw new Error(`Fetch failed (${res.status}): ${url}`);
-    return cheerio.load(await res.text());
+    const html = await res.text();
+    // Thrown, not parsed: the stub has no cards, and an empty page is how the
+    // last wall went unnoticed for a week.
+    if (isBrowserCheck(html)) throw new Error(`narto browser check not passed: ${url}`);
+    return cheerio.load(html);
   }
 
   private static absolute(url: string) {
@@ -74,6 +84,7 @@ export class NartoDrama {
 
       const img = card.find("img.poster");
       const title =
+        card.attr("data-movie-title") ||
         card.attr("data-search-title") ||
         card.find("h3.title").attr("title") ||
         card.find("h3.title").text().trim() ||

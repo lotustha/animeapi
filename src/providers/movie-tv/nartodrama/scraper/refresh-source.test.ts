@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyEdgeResponse,
+  isServable,
   isUsableSource,
   missVerdict,
   resolveSourceResult,
@@ -196,5 +197,85 @@ describe("resolveSourceResult", () => {
     const gone: EdgeAnswer = { kind: "gone", reason: "upstream-refused" };
     const { call } = ladder([gone, gone]);
     expect((await resolveSourceResult(ctx, "really-gone", 1, {}, call)).kind).toBe("gone");
+  });
+});
+
+// A link whose signature reads as lapsed is not always dead. FlexTV stamps
+// every link with its import time (`auth_key=1784842668-…`, July) and the CDN
+// still serves it two months on; measured 2026-09-24 on "Die vorübergehende
+// Braut des CEOs": each cold resolve was called dead, forced against narto,
+// and got the very same link back. These pin the rule that the CDN, not the
+// date alone, has the last word on a lapsed link.
+describe("isServable", () => {
+  const probe = (status: number | Error) => {
+    const asked: string[] = [];
+    const fn = async (url: string) => {
+      asked.push(url);
+      if (status instanceof Error) throw status;
+      return status;
+    };
+    return { asked, fn };
+  };
+
+  it("does not probe a link that is still in date", async () => {
+    const { asked, fn } = probe(403);
+    expect(await isServable(source(LIVE), "s", 1, fn)).toBe(true);
+    expect(asked).toEqual([]);
+  });
+
+  it("asks the CDN about a lapsed link and believes a 206", async () => {
+    const { asked, fn } = probe(206);
+    expect(await isServable(source(DEAD), "s", 1, fn)).toBe(true);
+    expect(asked).toEqual([DEAD]);
+  });
+
+  it("calls a lapsed link dead when the CDN refuses it", async () => {
+    expect(await isServable(source(DEAD), "s", 1, probe(403).fn)).toBe(false);
+    expect(await isServable(source(DEAD), "s", 1, probe(410).fn)).toBe(false);
+  });
+
+  it("calls a lapsed link dead when the CDN cannot be asked", async () => {
+    expect(await isServable(source(DEAD), "s", 1, probe(new Error("timeout")).fn)).toBe(false);
+    expect(await isServable(source(DEAD), "s", 1, probe(503).fn)).toBe(false);
+  });
+
+  it("rejects an answer with nothing to play without asking", async () => {
+    const { asked, fn } = probe(200);
+    expect(await isServable(null, "s", 1, fn)).toBe(false);
+    expect(await isServable({ ok: true } as RefreshSource, "s", 1, fn)).toBe(false);
+    expect(asked).toEqual([]);
+  });
+});
+
+describe("resolveSourceResult with a lapsed link the CDN still serves", () => {
+  const ctx = {
+    refreshBase: "https://n/detail/watch/s",
+    contextToken: null,
+    edgeBase: "https://e",
+    app: null,
+    episodes: [],
+  } as WatchPageContext;
+  const ok = (url: string): EdgeAnswer => ({ kind: "ok", source: { ok: true, direct_play_url: url } });
+
+  it("hands the cached link out and spends no forced call", async () => {
+    const asked: boolean[] = [];
+    const call = async (_c: WatchPageContext, _s: string, _e: number, force: boolean) => {
+      asked.push(force);
+      return ok(DEAD);
+    };
+    const answer = await resolveSourceResult(ctx, "flextv-title", 1, {}, call, async () => 206);
+    expect(answer).toEqual(ok(DEAD));
+    expect(asked).toEqual([false]);
+  });
+
+  it("still forces when the CDN refuses the lapsed link", async () => {
+    const asked: boolean[] = [];
+    const call = async (_c: WatchPageContext, _s: string, _e: number, force: boolean) => {
+      asked.push(force);
+      return force ? ok(LIVE) : ok(DEAD);
+    };
+    const answer = await resolveSourceResult(ctx, "netshort-title", 1, {}, call, async () => 403);
+    expect(answer).toEqual(ok(LIVE));
+    expect(asked).toEqual([false, true]);
   });
 });

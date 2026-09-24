@@ -517,7 +517,12 @@ const PROBE_TIMEOUT_MS = 4000;
  *    tell", and not knowing is not a reason to bypass narto's cache;
  *  - skipped for an episode forced within [FORCE_COOLDOWN_MS].
  */
-async function isRefusedByCdn(source: RefreshSource | null, slug: string, episode: number): Promise<boolean> {
+async function isRefusedByCdn(
+  source: RefreshSource | null,
+  slug: string,
+  episode: number,
+  probe: CdnProbe = probeCdn,
+): Promise<boolean> {
   const urls = [source?.direct_play_url, source?.play_url].filter(Boolean) as string[];
   if (urls.some((url) => signedUrlExpiry(url) !== null)) return false;
 
@@ -535,13 +540,66 @@ async function isRefusedByCdn(source: RefreshSource | null, slug: string, episod
   }
 
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": UA, Range: "bytes=0-0" },
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    });
-    // The body is not wanted; do not leave the connection holding it.
-    void res.body?.cancel().catch(() => {});
-    return res.status === 401 || res.status === 403 || res.status === 410;
+    const status = await probe(url);
+    return status === 401 || status === 403 || status === 410;
+  } catch {
+    return false;
+  }
+}
+
+/** Ask a CDN for one byte of a link. The status is the answer; the body is not wanted. */
+export type CdnProbe = (url: string) => Promise<number>;
+
+async function probeCdn(url: string): Promise<number> {
+  const res = await fetch(url, {
+    headers: { "User-Agent": UA, Range: "bytes=0-0" },
+    signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+  });
+  // Do not leave the connection holding a body nobody reads.
+  void res.body?.cancel().catch(() => {});
+  return res.status;
+}
+
+/**
+ * Whether a cached answer is worth handing to a player — the CDN having the
+ * last word when the date in the link says no.
+ *
+ * [isUsableSource] condemns a link whose readable deadline has passed, and it
+ * was wrong about FlexTV: that provider stamps every link with its IMPORT time
+ * (`auth_key=1784842668-…`, July) and the CDN serves it months later. Measured
+ * 2026-09-24 on "Die vorübergehende Braut des CEOs": every cold resolve was
+ * called dead, forced against narto — the expensive call, past narto's cache
+ * to the provider — and came back with the identical link. Two upstream calls
+ * per resolve, on the provider whose viewer had just drawn narto's 429.
+ *
+ * So a lapsed date now costs one ranged request instead of a forced refresh:
+ *  - the CDN serves the byte (2xx) → the date was not a deadline; use the link;
+ *  - it refuses (401/403/410) → dead, as NetShort's really are; force;
+ *  - it cannot be asked (timeout, 5xx, network) → the date stands; force, as
+ *    before this check existed. Unlike the opaque-token case, here there IS
+ *    evidence against the link, so not knowing does not rescue it.
+ * A link without a readable date is judged as before, by [isRefusedByCdn].
+ */
+export async function isServable(
+  source: RefreshSource | null,
+  slug: string,
+  episode: number,
+  probe: CdnProbe = probeCdn,
+  nowSec = Date.now() / 1000,
+): Promise<boolean> {
+  if (!source?.ok) return false;
+  const urls = [source.direct_play_url, source.play_url].filter(Boolean) as string[];
+  if (urls.length === 0) return false;
+  if (isUsableSource(source, nowSec)) return !(await isRefusedByCdn(source, slug, episode, probe));
+
+  const lapsed = urls.find((url) => {
+    const expiry = signedUrlExpiry(url);
+    return expiry !== null && expiry < nowSec + EXPIRY_MARGIN_SEC && /^https?:\/\//i.test(url);
+  });
+  if (!lapsed) return false;
+  try {
+    const status = await probe(lapsed);
+    return status >= 200 && status < 300;
   } catch {
     return false;
   }
@@ -587,6 +645,7 @@ export async function resolveSourceResult(
   episode: number,
   options: { fresh?: boolean } = {},
   call: typeof callRefreshSource = callRefreshSource,
+  probe: CdnProbe = probeCdn,
 ): Promise<EdgeAnswer> {
   const rungs: EdgeAnswer[] = [];
   try {
@@ -608,7 +667,7 @@ export async function resolveSourceResult(
 
     const cheap = await call(ctx, slug, episode, false);
     const cached = cheap.kind === "ok" ? cheap.source : null;
-    if (isUsableSource(cached) && !(await isRefusedByCdn(cached, slug, episode))) return cheap;
+    if (await isServable(cached, slug, episode, probe)) return cheap;
     if (isRateLimited(cheap)) return cheap;
     rungs.push(cheap);
     if (cached) Logger.warn(`nartodrama: cached source for ${slug} ep ${episode} is dead — forcing a refresh`);

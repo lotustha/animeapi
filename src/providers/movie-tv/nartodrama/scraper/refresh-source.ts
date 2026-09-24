@@ -4,6 +4,7 @@ import { nartodrama, nartodrama_edge } from "../../../origins.js";
 import { refreshSourceSchema, episodeItemsSchema } from "../types.js";
 import type { RefreshSource } from "../types.js";
 import { browserCheckCookie, isBrowserCheck } from "./browser-check.js";
+import { nartoBudget } from "./narto-budget.js";
 
 export const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -279,6 +280,7 @@ async function fetchWatchPageAnswer(
   if (!res) return { miss: busy("fetch-failed") };
   if (res.status === 404) return { miss: { kind: "gone", reason: "series-not-found" } };
   if (res.status === 429) {
+    nartoBudget.noteBusy();
     return { miss: busy("rate-limited", retryAfterFrom(res.headers.get("retry-after"), RETRY_AFTER_RATE_LIMITED_SEC)) };
   }
   if (!res.ok) return { miss: busy(res.status >= 500 ? "upstream-5xx" : "token-refused") };
@@ -431,6 +433,7 @@ async function callRefreshSource(
     json = undefined;
   }
 
+  if (res.status === 429) nartoBudget.noteBusy();
   return classifyEdgeResponse(res.status, json, res.headers.get("retry-after"));
 }
 

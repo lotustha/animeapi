@@ -35,6 +35,7 @@ import type {
   UpstreamProvider,
 } from "./types.js";
 import { browserCheckCookie, isBrowserCheck } from "./scraper/browser-check.js";
+import { nartoBudget } from "./scraper/narto-budget.js";
 
 const EMPTY_PAGE: Paginated<DramaCard> = { currentPage: 1, hasNextPage: false, results: [] };
 
@@ -48,6 +49,7 @@ export class NartoDrama {
         Cookie: browserCheckCookie(),
       },
     });
+    if (res.status === 429) nartoBudget.noteBusy();
     if (!res.ok) throw new Error(`Fetch failed (${res.status}): ${url}`);
     const html = await res.text();
     // Thrown, not parsed: the stub has no cards, and an empty page is how the

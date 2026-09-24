@@ -6,6 +6,7 @@ import { browserCheckCookie } from "./browser-check.js";
 import { collectTabPages } from "./catalogue-pages.js";
 
 import type { ProviderCatalogue, ProviderItem, ProviderSection } from "../types.js";
+import { nartoBudget } from "./narto-budget.js";
 
 const SECTIONS_URL = `${nartodrama}/home/providers/sections`;
 
@@ -46,6 +47,7 @@ export async function fetchProviderSections(
         Cookie: browserCheckCookie(),
       },
     });
+    if (res.status === 429) nartoBudget.noteBusy();
     if (!res.ok) return null;
 
     const parsed = providerSectionsSchema.safeParse(await res.json());

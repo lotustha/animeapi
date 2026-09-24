@@ -224,8 +224,8 @@ export class NartoDrama {
    * info()/watch() accept. Kept as its own step because resolving every item in
    * a catalogue eagerly would cost one request per item.
    */
-  static async resolve(provider: string, bookId: string) {
-    const slug = await resolveImportSlug(provider, bookId);
+  static async resolve(provider: string, bookId: string, lang: string = LANG) {
+    const slug = await resolveImportSlug(provider, bookId, lang);
     if (!slug) return null;
     return { provider, bookId, slug, url: `${nartodrama}/detail/watch/${slug}` };
   }

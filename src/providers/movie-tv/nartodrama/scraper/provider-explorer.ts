@@ -2,6 +2,7 @@ import { Logger } from "../../../../core/logger.js";
 import { nartodrama } from "../../../origins.js";
 import { providerSectionsSchema } from "../types.js";
 import { LANG, UA } from "./refresh-source.js";
+import { browserCheckCookie } from "./browser-check.js";
 
 import type { ProviderCatalogue, ProviderItem, ProviderSection } from "../types.js";
 
@@ -89,13 +90,19 @@ const MAX_HOPS = 4;
  * page renders), so a series keeps its identity whatever language it was
  * imported under.
  */
-export async function resolveImportSlug(provider: string, bookId: string): Promise<string | null> {
+export async function resolveImportSlug(
+  provider: string,
+  bookId: string,
+  lang: string = LANG,
+): Promise<string | null> {
   try {
     const url = new URL(`${nartodrama}/search/import`);
     url.searchParams.set("provider", provider);
     url.searchParams.set("book_id", bookId);
-    url.searchParams.set("lang", LANG);
-    url.searchParams.set("target_lang", LANG);
+    // The book's own locale. Pinned to en-US, a German catalogue's book id was
+    // resolved as if it were English, the one mapping that must not guess.
+    url.searchParams.set("lang", lang);
+    url.searchParams.set("target_lang", lang);
 
     // TWO hops are needed: /search/import first 302s to an intermediate
     // /detail/dummy/<provider>/<bookId>/<ep>, and only that one answers with
@@ -108,7 +115,7 @@ export async function resolveImportSlug(provider: string, bookId: string): Promi
     for (let hop = 0; hop < MAX_HOPS && next; hop++) {
       const res: Response = await fetch(next, {
         redirect: "manual",
-        headers: { "User-Agent": UA, Accept: "text/html" },
+        headers: { "User-Agent": UA, Accept: "text/html", Cookie: browserCheckCookie() },
       });
 
       const location: string = res.headers.get("location") || "";

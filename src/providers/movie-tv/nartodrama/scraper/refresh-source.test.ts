@@ -3,6 +3,8 @@ import {
   classifyEdgeResponse,
   isServable,
   isUsableSource,
+  LANG,
+  LOCALISED,
   listedSource,
   prefersListing,
   missVerdict,
@@ -352,5 +354,25 @@ describe("prefersListing", () => {
     expect(prefersListing(" AnyReel ")).toBe(true);
     expect(prefersListing("reelshort")).toBe(false);
     expect(prefersListing(null)).toBe(false);
+  });
+});
+
+// Measured 2026-09-25: all 22 locales upstream advertises carry their own
+// catalogue (it used to be nine). readLang honours exactly this set, so pin it:
+// every one accepted, and anything else - junk or a wrong-cased real locale -
+// still falls back instead of keying the cache under a bogus name.
+describe("LOCALISED", () => {
+  it("honours all 22 upstream locales", () => {
+    expect(LOCALISED.size).toBe(22);
+    for (const lang of ["en-US", "hi-IN", "ko-KR", "bn-BD", "ta-IN", "tl-PH", "zh-TW", "pl-PL"]) {
+      expect(LOCALISED.has(lang)).toBe(true);
+    }
+    expect(LOCALISED.has(LANG)).toBe(true);
+  });
+
+  it("rejects junk and wrong-cased locales", () => {
+    for (const lang of ["xx-XX", "en-us", "EN-US", "hi", "", "all"]) {
+      expect(LOCALISED.has(lang)).toBe(false);
+    }
   });
 });

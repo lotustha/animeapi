@@ -16,24 +16,37 @@ export const UA =
 // carry it does.
 //
 // This is the DEFAULT, not the only option: every entry point takes a `lang`
-// argument and callers may ask for another locale. Upstream advertises 22, but
-// only nine carry their own catalogue — en-US, it-IT, de-DE, pt-PT, pl-PL,
-// fr-FR, es-ES, ru-RU and tr-TR. The other thirteen (id-ID, ja-JP, ko-KR,
-// zh-TW, th-TH, ar-SA, vi-VN, tl-PH, ms-MY, hi-IN, ta-IN, te-IN, bn-BD) return
-// the English list verbatim, so asking for them is legal but pointless.
+// argument and callers may ask for another locale. Upstream advertises 22 and,
+// measured 2026-09-25 with home(3, lang), all 22 now answer with their own
+// list: most in the native language, ta-IN/te-IN/bn-BD with Spanish-dubbed
+// titles, tl-PH an English-ish list distinct from en-US. None is a verbatim
+// copy of en-US any more (earlier only nine were), so every one is honoured.
 export const LANG = "en-US";
 
-/** Locales that actually have their own catalogue upstream. */
+/** Locales upstream advertises; each carries its own catalogue (2026-09-25). */
 export const LOCALISED = new Set([
   "en-US",
-  "it-IT",
+  "id-ID",
+  "ja-JP",
+  "ko-KR",
+  "zh-TW",
+  "es-ES",
+  "th-TH",
   "de-DE",
   "pt-PT",
-  "pl-PL",
   "fr-FR",
-  "es-ES",
+  "ar-SA",
+  "vi-VN",
   "ru-RU",
+  "it-IT",
   "tr-TR",
+  "tl-PH",
+  "ms-MY",
+  "hi-IN",
+  "ta-IN",
+  "te-IN",
+  "bn-BD",
+  "pl-PL",
 ]);
 
 /**

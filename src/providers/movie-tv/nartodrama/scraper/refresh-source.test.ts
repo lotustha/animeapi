@@ -479,3 +479,27 @@ describe("the link the probes judge is the link that is served", () => {
     expect(asked.every((u) => u.startsWith("https://origin/"))).toBe(true);
   });
 });
+
+// MoboReels (cdreader, Tencent VOD signing), 2026-09-25: "2008 Mein Vaapsi"
+// ep 1 carried t=6a798eb4 (2026-08-10), was refused 403 from everywhere, and
+// a forced refresh returned the identical link.
+describe("a lapsed Tencent-signed link", () => {
+  const LAPSED = "https://cdnvideo.cdreader.com/x/f0.mp4?t=6a798eb4&us=ae3d&sign=9360";
+  const ctx = { refreshBase: "https://n/detail/watch/s", contextToken: null, edgeBase: "https://e", app: null, episodes: [] };
+  const answer: EdgeAnswer = { kind: "ok", source: { ok: true, play_url: LAPSED } };
+
+  it("reads t= as a hex expiry, only beside a sign=", () => {
+    expect(signedUrlExpiry(LAPSED)).toBe(0x6a798eb4);
+    expect(signedUrlExpiry("https://c/x.mp4?t=6a798eb4")).toBeNull();
+  });
+
+  it("is gone when forced and still refused 403 past its date", async () => {
+    const asked: boolean[] = [];
+    const call = async (_c: WatchPageContext, _s: string, _e: number, force: boolean) => (asked.push(force), answer);
+    expect(await resolveSourceResult(ctx, "mobo-2008", 1, {}, call, async () => 403)).toMatchObject({
+      kind: "gone",
+      reason: "expired",
+    });
+    expect(asked).toEqual([false, true]);
+  });
+});

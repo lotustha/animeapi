@@ -525,8 +525,18 @@ async function callRefreshSource(
  * would be worse than not knowing.
  */
 export function signedUrlExpiry(url: string | null | undefined): number | null {
-  const match = String(url ?? "").match(/[?&~=](?:Expires|auth_key|exp)=(\d{10})(?!\d)/);
-  return match ? Number(match[1]) : null;
+  const text = String(url ?? "");
+  const match = text.match(/[?&~=](?:Expires|auth_key|exp)=(\d{10})(?!\d)/);
+  if (match) return Number(match[1]);
+  // Tencent VOD anti-leech (`t` = expiry as 8 hex digits, beside `us` and
+  // `sign`) — MoboReels' cdreader CDN. "2008 Mein Vaapsi" (hi-IN) ep 1 carried
+  // t=6a798eb4 (2026-08-10) on 2026-09-25, refused 403 from everywhere, and a
+  // forced refresh returned the identical link.
+  if (/[?&]sign=/.test(text)) {
+    const hex = text.match(/[?&]t=([0-9a-f]{8})(?=&|$)/i);
+    if (hex) return parseInt(hex[1], 16);
+  }
+  return null;
 }
 
 /** A minute of grace: a link that dies while the player is opening it is dead. */
@@ -610,16 +620,26 @@ export function servedUrl(source: RefreshSource | null | undefined): string | nu
 /**
  * Whether a FORCED answer is a link the CDN declares dead.
  *
- * Only 410 — which [probeCdn] also reports for a fake playlist — counts. A 401
- * or 403 may be this server being refused while viewers are served, and a
+ * A 410 — which [probeCdn] also reports for a fake playlist — counts, and so
+ * does a 401/403 on a link whose own expiry date has passed. A 401 or 403 on
+ * an in-date link may be this server being refused while viewers are served, and a
  * timeout or 5xx is not knowing; both keep the old rule of handing the forced
  * link out, since nothing better is left.
  */
-async function provenDead(source: RefreshSource, probe: CdnProbe): Promise<boolean> {
+async function provenDead(
+  source: RefreshSource,
+  probe: CdnProbe,
+  nowSec = Date.now() / 1000,
+): Promise<boolean> {
   const url = servedUrl(source);
   if (!url) return false;
   try {
-    return (await probe(url)) === 410;
+    const status = await probe(url);
+    if (status === 410) return true;
+    // A refusal is proof too when the link's own date has passed: two
+    // independent signs, so not the "only this server is refused" case.
+    const expiry = signedUrlExpiry(url);
+    return (status === 401 || status === 403) && expiry !== null && expiry < nowSec;
   } catch {
     return false;
   }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyEdgeResponse,
+  isFakePlaylist,
   isServable,
   isUsableSource,
   LANG,
@@ -184,7 +185,7 @@ describe("resolveSourceResult", () => {
 
   it("still forces a refresh when the cached link is dead", async () => {
     const { asked, call } = ladder([ok(DEAD), ok(LIVE)]);
-    const answer = await resolveSourceResult(ctx, "dead-cache", 1, {}, call);
+    const answer = await resolveSourceResult(ctx, "dead-cache", 1, {}, call, async () => 403);
     expect(answer).toEqual(ok(LIVE));
     expect(asked).toEqual([false, true]);
   });
@@ -374,5 +375,66 @@ describe("LOCALISED", () => {
     for (const lang of ["xx-XX", "en-us", "EN-US", "hi", "", "all"]) {
       expect(LOCALISED.has(lang)).toBe(false);
     }
+  });
+});
+
+// Seen 2026-09-25 on "Bow to 10-Year-Old Archmage Aldric" (ShortMax) eps 75–76:
+// narto's relay answered 206 with a one-line "playlist" wrapping the origin's
+// `410 link expired`, forced refreshes returned the same wrapper, and the
+// status-only probe let it through to every viewer.
+describe("a link narto can no longer re-sign", () => {
+  const ctx = { refreshBase: "https://n/detail/watch/s", contextToken: null, edgeBase: "https://e", app: null, episodes: [] };
+  // Opaque token, no readable date: judged by the probe alone.
+  const WRAPPED: EdgeAnswer = { kind: "ok", source: { ok: true, direct_play_url: "https://relay/e/m/opaque" } };
+  const WORKING: EdgeAnswer = { kind: "ok", source: { ok: true, direct_play_url: "https://relay/e/m/working" } };
+  const recorder = (answer: EdgeAnswer) => {
+    const asked: boolean[] = [];
+    const call = async (_c: WatchPageContext, _s: string, _e: number, force: boolean) => {
+      asked.push(force);
+      return answer;
+    };
+    return { asked, call };
+  };
+
+  it("tells a fake playlist from a real one", () => {
+    expect(isFakePlaylist("/e/s/ey")).toBe(true);
+    expect(isFakePlaylist("shortmax-edge: link expired")).toBe(true);
+    expect(isFakePlaylist("#EXTM3U")).toBe(false);
+  });
+
+  it("is gone, not a dead link, when the forced refresh is also refused with 410", async () => {
+    const { asked, call } = recorder(WRAPPED);
+    expect(await resolveSourceResult(ctx, "archmage", 76, {}, call, async () => 410)).toEqual({
+      kind: "gone",
+      reason: "expired",
+    });
+    expect(asked).toEqual([false, true]);
+  });
+
+  it("stays gone inside the cooldown without forcing again", async () => {
+    const { asked, call } = recorder(WRAPPED);
+    await resolveSourceResult(ctx, "archmage-2", 76, {}, call, async () => 410);
+    expect(await resolveSourceResult(ctx, "archmage-2", 76, {}, call, async () => 410)).toMatchObject({ kind: "gone" });
+    expect(asked.filter(Boolean)).toHaveLength(1);
+  });
+
+  it("is gone when a player's fresh demand gets the dead link back", async () => {
+    const { asked, call } = recorder(WRAPPED);
+    expect(await resolveSourceResult(ctx, "archmage-3", 76, { fresh: true }, call, async () => 410)).toMatchObject({
+      kind: "gone",
+      reason: "expired",
+    });
+    expect(asked).toEqual([true]);
+  });
+
+  it("still hands out a forced link refused only with 403 — that may be this server, not the viewer", async () => {
+    const { call } = recorder(WRAPPED);
+    expect(await resolveSourceResult(ctx, "geo", 1, {}, call, async () => 403)).toEqual(WRAPPED);
+  });
+
+  it("serves an episode whose link plays", async () => {
+    const { asked, call } = recorder(WORKING);
+    expect(await resolveSourceResult(ctx, "archmage-ep40", 40, {}, call, async () => 206)).toEqual(WORKING);
+    expect(asked).toEqual([false]);
   });
 });

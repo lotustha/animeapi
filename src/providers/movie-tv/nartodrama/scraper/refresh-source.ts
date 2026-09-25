@@ -232,7 +232,9 @@ export type SourceMiss =
       kind: "gone";
       // `duplicate`: upstream gave this episode the previous episode's file.
       // See duplicate-episode.ts.
-      reason: "series-not-found" | "upstream-refused" | "no-url" | "duplicate";
+      // `expired`: a forced refresh handed back a link the CDN answers 410
+      // (or a fake playlist) — narto cannot re-sign it. See [provenDead].
+      reason: "series-not-found" | "upstream-refused" | "no-url" | "duplicate" | "expired";
     }
   | {
       kind: "busy";
@@ -552,15 +554,57 @@ export function isUsableSource(source: RefreshSource | null, nowSec = Date.now()
 /**
  * Episodes force-refreshed lately, by `slug#episode` → when.
  *
- * The brake on [isRefusedByCdn]. A probe that keeps failing for a reason a
+ * The brake on the forced rung. A probe that keeps failing for a reason a
  * refresh cannot cure — this server geo-blocked by a CDN that serves viewers
  * fine — would otherwise turn every request for that episode into a `force=1`
  * against narto, which is exactly the hammering the cheap-first ladder exists
  * to avoid. One forced refresh per episode per window; after that the cached
- * answer is trusted again and the viewer's own connection decides.
+ * answer is trusted again and the viewer's own connection decides — unless
+ * the force PROVED the link dead, see [provenDeadAt].
  */
 const recentlyForced = new Map<string, number>();
 const FORCE_COOLDOWN_MS = 10 * 60_000;
+
+/**
+ * Episodes whose forced refresh came back with a link the CDN answered 410,
+ * by `slug#episode` → when. Inside [FORCE_COOLDOWN_MS] such an episode is
+ * answered `gone` without asking narto again: the cached link is the same dead
+ * one, and a 410 is not the ambiguous refusal the cooldown's trust is for.
+ */
+const provenDeadAt = new Map<string, number>();
+
+/** Stamp `tag` now; drop entries older than the cooldown once the map has grown. */
+function stamp(map: Map<string, number>, tag: string) {
+  map.set(tag, Date.now());
+  if (map.size > 2000) {
+    for (const [key, at] of map) {
+      if (Date.now() - at >= FORCE_COOLDOWN_MS) map.delete(key);
+    }
+  }
+}
+
+const within = (map: Map<string, number>, tag: string, ms: number) => {
+  const at = map.get(tag);
+  return at !== undefined && Date.now() - at < ms;
+};
+
+/**
+ * Whether a FORCED answer is a link the CDN declares dead.
+ *
+ * Only 410 — which [probeCdn] also reports for a fake playlist — counts. A 401
+ * or 403 may be this server being refused while viewers are served, and a
+ * timeout or 5xx is not knowing; both keep the old rule of handing the forced
+ * link out, since nothing better is left.
+ */
+async function provenDead(source: RefreshSource, probe: CdnProbe): Promise<boolean> {
+  const url = [source.direct_play_url, source.play_url].find((u) => u && /^https?:\/\//i.test(u));
+  if (!url) return false;
+  try {
+    return (await probe(url)) === 410;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * How often a player may demand a fresh link for one episode.
@@ -590,7 +634,9 @@ const PROBE_TIMEOUT_MS = 4000;
  *    decided, for free;
  *  - only 401/403/410 count. A timeout, a 5xx or a network error is "could not
  *    tell", and not knowing is not a reason to bypass narto's cache;
- *  - skipped for an episode forced within [FORCE_COOLDOWN_MS].
+ *  - NOT skipped inside [FORCE_COOLDOWN_MS]: the cooldown holds back a second
+ *    force, never the check. Skipping it handed every viewer in the window the
+ *    dead link the first viewer's force could not replace.
  */
 async function isRefusedByCdn(
   source: RefreshSource | null,
@@ -603,16 +649,6 @@ async function isRefusedByCdn(
 
   const url = urls.find((u) => /^https?:\/\//i.test(u));
   if (!url) return false;
-
-  const forcedAt = recentlyForced.get(`${slug}#${episode}`);
-  if (forcedAt && Date.now() - forcedAt < FORCE_COOLDOWN_MS) return false;
-  // Bounded: entries are only useful for the cooldown, so drop the stale ones
-  // whenever the map has grown rather than on a timer nobody would maintain.
-  if (recentlyForced.size > 2000) {
-    for (const [key, at] of recentlyForced) {
-      if (Date.now() - at >= FORCE_COOLDOWN_MS) recentlyForced.delete(key);
-    }
-  }
 
   try {
     const status = await probe(url);
@@ -627,12 +663,30 @@ export type CdnProbe = (url: string) => Promise<number>;
 
 async function probeCdn(url: string): Promise<number> {
   const res = await fetch(url, {
-    headers: { "User-Agent": UA, Range: "bytes=0-0" },
+    headers: { "User-Agent": UA, Range: "bytes=0-6" },
     signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
   });
+  if (res.ok && /mpegurl/i.test(res.headers.get("content-type") ?? "")) {
+    return isFakePlaylist(await res.text()) ? 410 : res.status;
+  }
   // Do not leave the connection holding a body nobody reads.
   void res.body?.cancel().catch(() => {});
   return res.status;
+}
+
+/**
+ * A "playlist" that is not one: narto's relay wrapping an upstream error.
+ *
+ * Seen 2026-09-25 on "Bow to 10-Year-Old Archmage Aldric" (ShortMax) eps 75–76:
+ * the origin link answered `410 shortmax-edge: link expired`, and narto's
+ * `stream-e1` relay for it answered 206 `application/vnd.apple.mpegurl` with a
+ * one-line body — a segment token whose payload is that error text, which the
+ * relay then refuses with 403 "invalid segment url". A status-only probe passed
+ * it; every real playlist opens with `#EXTM3U`. Reported as 410, the status the
+ * origin gave, so every caller of the probe reads it as refused.
+ */
+export function isFakePlaylist(head: string): boolean {
+  return !head.trimStart().startsWith("#EXTM3U");
 }
 
 /**
@@ -719,7 +773,8 @@ export async function listedSource(
  * "Unusable" includes a link that has already expired — see [isUsableSource].
  * The repaired answer is NOT held to that test: by then there is nothing left
  * to try, and a link this code only suspects is dead is still a better answer
- * than none if the suspicion is wrong.
+ * than none if the suspicion is wrong. Suspects only, though — a repaired link
+ * the CDN answers 410 is proof, and is answered `gone` (see [provenDead]).
  */
 export async function resolveSource(
   ctx: WatchPageContext,
@@ -760,11 +815,18 @@ export async function resolveSourceResult(
     // refuses the viewer, a token that lapses between the probe and the play —
     // and the viewer's own failed attempt cannot.
     const tag = `${slug}#${episode}`;
-    const forcedAt = recentlyForced.get(tag);
-    if (options.fresh && !(forcedAt && Date.now() - forcedAt < FRESH_COOLDOWN_MS)) {
-      recentlyForced.set(tag, Date.now());
+    // A forced answer is judged too, but only a 410 condemns it: see
+    // [provenDead]. Anything short of that is still handed out.
+    const expired = (): SourceMiss => {
+      stamp(provenDeadAt, tag);
+      Logger.warn(`nartodrama: ${slug} ep ${episode} — forced refresh returned a dead link (410)`);
+      return { kind: "gone", reason: "expired" };
+    };
+
+    if (options.fresh && !within(recentlyForced, tag, FRESH_COOLDOWN_MS)) {
+      stamp(recentlyForced, tag);
       const demanded = await call(ctx, slug, episode, true);
-      if (demanded.kind === "ok") return demanded;
+      if (demanded.kind === "ok") return (await provenDead(demanded.source, probe)) ? expired() : demanded;
       if (isRateLimited(demanded)) return demanded;
       rungs.push(demanded);
       // Upstream had nothing new; fall through to the ordinary ladder rather
@@ -773,14 +835,22 @@ export async function resolveSourceResult(
 
     const cheap = await call(ctx, slug, episode, false);
     const cached = cheap.kind === "ok" ? cheap.source : null;
-    if (await isServable(cached, slug, episode, probe)) return cheap;
+    if (await isServable(cached, slug, episode, probe)) {
+      provenDeadAt.delete(tag);
+      return cheap;
+    }
     if (isRateLimited(cheap)) return cheap;
+    if (cached && within(recentlyForced, tag, FORCE_COOLDOWN_MS)) {
+      // Forced lately. Proven dead then: say so. Otherwise trust the cache and
+      // let the viewer's connection decide, as before — no second force.
+      return within(provenDeadAt, tag, FORCE_COOLDOWN_MS) ? { kind: "gone", reason: "expired" } : cheap;
+    }
     rungs.push(cheap);
     if (cached) Logger.warn(`nartodrama: cached source for ${slug} ep ${episode} is dead — forcing a refresh`);
-    recentlyForced.set(tag, Date.now());
+    stamp(recentlyForced, tag);
 
     const repaired = await call(ctx, slug, episode, true);
-    if (repaired.kind === "ok") return repaired;
+    if (repaired.kind === "ok") return (await provenDead(repaired.source, probe)) ? expired() : repaired;
     rungs.push(repaired);
 
     const verdict = missVerdict(rungs);

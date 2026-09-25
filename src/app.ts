@@ -26,6 +26,13 @@ export async function createApp() {
   const basePath = (env.BASE_PATH || "").replace(/\/+$/, "");
   if (basePath) appConfig.prefix = basePath;
 
+  // Elysia's Bun adapter closes a request that has sent nothing for 30s. A
+  // provider's full catalogue (`/provider/:key?all=1`, every page of every
+  // tab) runs longer for the big apps, and the connection was dropped mid-walk:
+  // 76 of discover's listings came back 502 on 2026-09-25 (nginx: "upstream
+  // prematurely closed connection"). Bun's ceiling is 255s.
+  if (!isNode) appConfig.serve = { idleTimeout: 120 };
+
   const app = new Elysia(appConfig)
     .use(
       cors({

@@ -841,9 +841,12 @@ export async function resolveSourceResult(
     }
     if (isRateLimited(cheap)) return cheap;
     if (cached && within(recentlyForced, tag, FORCE_COOLDOWN_MS)) {
-      // Forced lately. Proven dead then: say so. Otherwise trust the cache and
-      // let the viewer's connection decide, as before — no second force.
-      return within(provenDeadAt, tag, FORCE_COOLDOWN_MS) ? { kind: "gone", reason: "expired" } : cheap;
+      // Forced lately, so no second force. A 410 is still proof — also when
+      // the force itself came back with no link, as a `fresh` one did in
+      // production for Archmage ep 76. Anything less: trust the cache and let
+      // the viewer's connection decide, as before.
+      if (within(provenDeadAt, tag, FORCE_COOLDOWN_MS)) return { kind: "gone", reason: "expired" };
+      return (await provenDead(cached, probe)) ? expired() : cheap;
     }
     rungs.push(cheap);
     if (cached) Logger.warn(`nartodrama: cached source for ${slug} ep ${episode} is dead — forcing a refresh`);

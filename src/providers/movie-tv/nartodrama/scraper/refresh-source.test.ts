@@ -427,6 +427,19 @@ describe("a link narto can no longer re-sign", () => {
     expect(asked).toEqual([true]);
   });
 
+  it("is gone when a fresh demand gets no link and the cached one is refused with 410", async () => {
+    const asked: boolean[] = [];
+    const call = async (_c: WatchPageContext, _s: string, _e: number, force: boolean): Promise<EdgeAnswer> => {
+      asked.push(force);
+      return force ? { kind: "busy", reason: "fetch-failed", retryAfterSec: 10 } : WRAPPED;
+    };
+    expect(await resolveSourceResult(ctx, "archmage-4", 76, { fresh: true }, call, async () => 410)).toMatchObject({
+      kind: "gone",
+      reason: "expired",
+    });
+    expect(asked).toEqual([true, false]);
+  });
+
   it("still hands out a forced link refused only with 403 — that may be this server, not the viewer", async () => {
     const { call } = recorder(WRAPPED);
     expect(await resolveSourceResult(ctx, "geo", 1, {}, call, async () => 403)).toEqual(WRAPPED);

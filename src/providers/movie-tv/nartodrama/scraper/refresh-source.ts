@@ -593,6 +593,21 @@ const within = (map: Map<string, number>, tag: string, ms: number) => {
 };
 
 /**
+ * The link a player is handed for this answer: `play_url` first, as the watch
+ * route builds its primary source. Every liveness probe judges THIS link.
+ *
+ * They used to judge `direct_play_url` first — narto's stream-e1 relay — and
+ * the two can disagree. "Bow to 10-Year-Old Archmage Aldric" ep 79, 2026-09-25
+ * 19:41: the relay answered a real playlist, so the cached answer passed; the
+ * app was handed `play_url` on shortmax-stream, which answered 410 "link
+ * expired" to all eleven of its attempts through our proxy.
+ */
+export function servedUrl(source: RefreshSource | null | undefined): string | null {
+  const url = source?.play_url || source?.direct_play_url || "";
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+/**
  * Whether a FORCED answer is a link the CDN declares dead.
  *
  * Only 410 — which [probeCdn] also reports for a fake playlist — counts. A 401
@@ -601,7 +616,7 @@ const within = (map: Map<string, number>, tag: string, ms: number) => {
  * link out, since nothing better is left.
  */
 async function provenDead(source: RefreshSource, probe: CdnProbe): Promise<boolean> {
-  const url = [source.direct_play_url, source.play_url].find((u) => u && /^https?:\/\//i.test(u));
+  const url = servedUrl(source);
   if (!url) return false;
   try {
     return (await probe(url)) === 410;
@@ -651,7 +666,7 @@ async function isRefusedByCdn(
   const urls = [source?.direct_play_url, source?.play_url].filter(Boolean) as string[];
   if (urls.some((url) => signedUrlExpiry(url) !== null)) return false;
 
-  const url = urls.find((u) => /^https?:\/\//i.test(u));
+  const url = servedUrl(source);
   if (!url) return false;
 
   try {

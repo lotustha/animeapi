@@ -400,6 +400,7 @@ export class NartoDrama {
         return { kind: "gone", reason: "duplicate" };
       }
 
+      // Same choice as servedUrl(): the link the probes judged is the one served.
       const primary = resolved.play_url || resolved.direct_play_url || "";
       const sources: DramaSource[] = [];
       const seen = new Set<string>();

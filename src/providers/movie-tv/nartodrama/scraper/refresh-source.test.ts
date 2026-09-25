@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyEdgeResponse,
   isFakePlaylist,
+  servedUrl,
   isServable,
   isUsableSource,
   LANG,
@@ -450,5 +451,31 @@ describe("a link narto can no longer re-sign", () => {
     const { asked, call } = recorder(WORKING);
     expect(await resolveSourceResult(ctx, "archmage-ep40", 40, {}, call, async () => 206)).toEqual(WORKING);
     expect(asked).toEqual([false]);
+  });
+});
+
+// Archmage ep 79, 2026-09-25 19:41: narto's relay (direct_play_url) served a
+// real playlist while the origin link the app was handed (play_url) answered
+// 410 to every attempt. The probe judged the relay, so the dead link passed.
+describe("the link the probes judge is the link that is served", () => {
+  const ctx = { refreshBase: "https://n/detail/watch/s", contextToken: null, edgeBase: "https://e", app: null, episodes: [] };
+  const BOTH: EdgeAnswer = {
+    kind: "ok",
+    source: { ok: true, play_url: "https://origin/dead.m3u8", direct_play_url: "https://relay/fine" },
+  };
+  const byHost = (url: string) => (url.startsWith("https://origin/") ? 410 : 206);
+
+  it("prefers play_url, as the watch route does", () => {
+    expect(servedUrl({ ok: true, play_url: "https://a", direct_play_url: "https://b" })).toBe("https://a");
+    expect(servedUrl({ ok: true, direct_play_url: "https://b" })).toBe("https://b");
+    expect(servedUrl({ ok: true, play_url: "/relative" })).toBeNull();
+  });
+
+  it("is gone when the served link is dead, even though the relay is fine", async () => {
+    const asked: string[] = [];
+    const call = async () => BOTH;
+    const answer = await resolveSourceResult(ctx, "archmage-79", 79, {}, call, async (u) => (asked.push(u), byHost(u)));
+    expect(answer).toMatchObject({ kind: "gone", reason: "expired" });
+    expect(asked.every((u) => u.startsWith("https://origin/"))).toBe(true);
   });
 });

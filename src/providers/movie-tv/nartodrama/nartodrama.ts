@@ -13,6 +13,7 @@ import {
   getWatchContextResult,
   isHlsSource,
   listedSource,
+  prefersListing,
   resolveSourceResult,
   servesDirect,
 } from "./scraper/refresh-source.js";
@@ -352,7 +353,13 @@ export class NartoDrama {
       if (!("ctx" in page)) return page.miss;
       const ctx = page.ctx;
 
-      const answer = await resolveSourceResult(ctx, slug, episode, options);
+      // A player reporting the last link dead (`fresh`) goes to the edge: the
+      // listed link is most likely the one that just failed.
+      const listedFirst =
+        !options.fresh && prefersListing(ctx.app) ? await listedSource(ctx.episodes, episode) : null;
+      const answer = listedFirst
+        ? ({ kind: "ok", source: listedFirst } as const)
+        : await resolveSourceResult(ctx, slug, episode, options);
       let resolved: RefreshSource;
       if (answer.kind === "ok") {
         resolved = answer.source;

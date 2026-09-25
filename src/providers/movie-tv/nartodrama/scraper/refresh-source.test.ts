@@ -4,6 +4,7 @@ import {
   isServable,
   isUsableSource,
   listedSource,
+  prefersListing,
   missVerdict,
   resolveSourceResult,
   signedUrlExpiry,
@@ -342,5 +343,14 @@ describe("listedSource", () => {
     expect(await listedSource(episodes, 99, probe)).toBeNull();
     expect(await listedSource(undefined, 1, probe)).toBeNull();
     expect(probed).toBe(0);
+  });
+});
+
+describe("prefersListing", () => {
+  it("takes the listed link first only for providers that list complete, unsigned links", () => {
+    expect(prefersListing("anyreel")).toBe(true);
+    expect(prefersListing(" AnyReel ")).toBe(true);
+    expect(prefersListing("reelshort")).toBe(false);
+    expect(prefersListing(null)).toBe(false);
   });
 });

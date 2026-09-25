@@ -121,6 +121,26 @@ export function absoluteUrl(url: string): string {
 }
 
 /**
+ * Upstream apps whose listed link is taken BEFORE asking the edge.
+ *
+ * AnyReel lists plain, unsigned m3u8 links. While narto's refresh for it was
+ * failing (2026-09-25) the first edge call hung the full 15s timeout before
+ * the cooldown 429, so a viewer waited 10-17s for a link the listing already
+ * had and the CDN served in 45ms. Every edge call also re-armed narto's
+ * cooldown for that episode. Not for every provider: the edge answer can carry
+ * subtitles and resolutions the listing does not.
+ */
+const LISTING_FIRST_PROVIDERS = new Set(["anyreel"]);
+
+export function prefersListing(app: string | null | undefined): boolean {
+  return LISTING_FIRST_PROVIDERS.has(
+    String(app || "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
+/**
  * Upstream apps whose CDN refuses the production VPS by IP.
  *
  * melolo answers 410 Gone for a request originating on the France VPS while the

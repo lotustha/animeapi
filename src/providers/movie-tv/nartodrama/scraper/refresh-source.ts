@@ -203,7 +203,16 @@ export type SourceMiss =
     }
   | {
       kind: "busy";
-      reason: "rate-limited" | "fetch-failed" | "upstream-5xx" | "token-refused" | "bad-body" | "exception";
+      // `upstream-cooldown`: narto's 429 for ONE episode whose provider fetch
+      // failed on narto's side. Not a rate limit on this server.
+      reason:
+        | "rate-limited"
+        | "upstream-cooldown"
+        | "fetch-failed"
+        | "upstream-5xx"
+        | "token-refused"
+        | "bad-body"
+        | "exception";
       retryAfterSec: number;
     };
 
@@ -227,6 +236,22 @@ export const busy = (
 ): SourceMiss => ({ kind: "busy", reason, retryAfterSec });
 
 /**
+ * A 429 whose body says the EPISODE is cooling down, not this caller.
+ *
+ * Seen 2026-09-25 on every AnyReel title: narto's own fetch from the provider
+ * failed, and it answers 429 `refresh_source_recently_failed` (45s), then
+ * `refresh_source_cooldown_active` (20s), to anyone asking for that episode —
+ * a home IP the same as this server, while ReelShort resolved from both. The
+ * wait is in the body; narto sends no Retry-After header.
+ */
+function upstreamCooldown(body: unknown): { retryAfter: string | null } | null {
+  if (!body || typeof body !== "object") return null;
+  const { message, retry_after_seconds } = body as { message?: unknown; retry_after_seconds?: unknown };
+  if (typeof message !== "string" || !/^refresh_source_(recently_failed|cooldown)/.test(message)) return null;
+  return { retryAfter: retry_after_seconds == null ? null : String(retry_after_seconds) };
+}
+
+/**
  * Read one edge response. Pure, so every row of this table is pinned by a test.
  *
  * `body` is the parsed JSON, or `undefined` when it would not parse — an HTML
@@ -238,7 +263,12 @@ export function classifyEdgeResponse(
   body: unknown,
   retryAfter?: string | null,
 ): EdgeAnswer {
-  if (status === 429) return busy("rate-limited", retryAfterFrom(retryAfter, RETRY_AFTER_RATE_LIMITED_SEC));
+  if (status === 429) {
+    const cooldown = upstreamCooldown(body);
+    return cooldown
+      ? busy("upstream-cooldown", retryAfterFrom(cooldown.retryAfter ?? retryAfter, RETRY_AFTER_RATE_LIMITED_SEC))
+      : busy("rate-limited", retryAfterFrom(retryAfter, RETRY_AFTER_RATE_LIMITED_SEC));
+  }
   if (status >= 500) return busy("upstream-5xx", retryAfterFrom(retryAfter, RETRY_AFTER_BLIP_SEC));
   if (status === 401 || status === 403) return busy("token-refused");
   if (status === 404) return { kind: "gone", reason: "upstream-refused" };
@@ -433,8 +463,11 @@ async function callRefreshSource(
     json = undefined;
   }
 
-  if (res.status === 429) nartoBudget.noteBusy();
-  return classifyEdgeResponse(res.status, json, res.headers.get("retry-after"));
+  const answer = classifyEdgeResponse(res.status, json, res.headers.get("retry-after"));
+  // Only a real rate limit quiets background work. One provider's episodes
+  // cooling down on narto's side says nothing about this server's budget.
+  if (answer.kind === "busy" && answer.reason === "rate-limited") nartoBudget.noteBusy();
+  return answer;
 }
 
 /**
@@ -615,6 +648,34 @@ export async function isServable(
 }
 
 /**
+ * The episode's link from the watch page's own listing, if the CDN serves it.
+ *
+ * Only a fallback for when the edge gave nothing. Most providers list "" and
+ * sign on demand, but AnyReel lists plain m3u8 links for some episodes — and on
+ * 2026-09-25 narto's refresh for AnyReel was failing outright, so those listed
+ * links were the only way any of its episodes played. Judged by the CDN, never
+ * trusted: one ranged request, 2xx or nothing.
+ */
+export async function listedSource(
+  episodes: unknown[] | undefined,
+  episode: number,
+  probe: CdnProbe = probeCdn,
+): Promise<RefreshSource | null> {
+  const item = (episodes ?? []).find((it) => (it as { number?: unknown })?.number === episode) as
+    | { play_url?: string; is_playable?: boolean; subtitle_url?: string | null }
+    | undefined;
+  const url = item?.play_url ?? "";
+  if (item?.is_playable === false || !/^https?:\/\//i.test(url)) return null;
+  try {
+    const status = await probe(url);
+    if (status < 200 || status >= 300) return null;
+  } catch {
+    return null;
+  }
+  return { ok: true, play_url: url, ...(item?.subtitle_url ? { subtitle_url: item.subtitle_url } : {}) };
+}
+
+/**
  * Resolve the signed stream for one episode.
  *
  * Mirrors the site's own direct → repair ladder: ask for the cached source
@@ -637,7 +698,10 @@ export async function resolveSource(
   return answer.kind === "ok" ? answer.source : null;
 }
 
-const isRateLimited = (answer: EdgeAnswer) => answer.kind === "busy" && answer.reason === "rate-limited";
+// A cooling-down episode ends the ladder too: a forced call on it is refused
+// the same way and re-arms narto's cooldown for every viewer of that episode.
+const isRateLimited = (answer: EdgeAnswer) =>
+  answer.kind === "busy" && (answer.reason === "rate-limited" || answer.reason === "upstream-cooldown");
 
 /**
  * [resolveSource], but saying WHY when there is no link. See [SourceMiss].

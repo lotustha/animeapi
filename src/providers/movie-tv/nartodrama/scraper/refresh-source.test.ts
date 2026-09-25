@@ -3,6 +3,7 @@ import {
   classifyEdgeResponse,
   isServable,
   isUsableSource,
+  listedSource,
   missVerdict,
   resolveSourceResult,
   signedUrlExpiry,
@@ -277,5 +278,69 @@ describe("resolveSourceResult with a lapsed link the CDN still serves", () => {
     const answer = await resolveSourceResult(ctx, "netshort-title", 1, {}, call, async () => 403);
     expect(answer).toEqual(ok(LIVE));
     expect(asked).toEqual([false, true]);
+  });
+});
+
+// Seen 2026-09-25 on every AnyReel title: narto answers 429 for an episode
+// whose provider fetch failed on its side, to every caller alike. The wait is
+// in the body. It is not a rate limit on this server, but it still must not be
+// answered with a forced call, which narto refuses the same way.
+describe("an episode cooling down on narto's side", () => {
+  it("is told apart from a rate limit, and takes the wait from the body", () => {
+    expect(
+      classifyEdgeResponse(429, { ok: false, message: "refresh_source_recently_failed", retry_after_seconds: 45 }),
+    ).toEqual({ kind: "busy", reason: "upstream-cooldown", retryAfterSec: 45 });
+    expect(
+      classifyEdgeResponse(429, { ok: false, message: "refresh_source_cooldown_active", retry_after_seconds: 20 }),
+    ).toEqual({ kind: "busy", reason: "upstream-cooldown", retryAfterSec: 20 });
+    expect(classifyEdgeResponse(429, { ok: false, message: "refresh_source_cooldown_active" }, "30")).toMatchObject({
+      reason: "upstream-cooldown",
+      retryAfterSec: 30,
+    });
+    expect(classifyEdgeResponse(429, { ok: false, message: "slow down" })).toMatchObject({ reason: "rate-limited" });
+  });
+
+  it("ends the ladder without a forced call", async () => {
+    const ctx = { refreshBase: "https://n/detail/watch/s", contextToken: null, edgeBase: "https://e", app: null, episodes: [] };
+    const cooling: EdgeAnswer = { kind: "busy", reason: "upstream-cooldown", retryAfterSec: 45 };
+    const asked: boolean[] = [];
+    const call = async (_c: WatchPageContext, _s: string, _e: number, force: boolean) => {
+      asked.push(force);
+      return cooling;
+    };
+    expect(await resolveSourceResult(ctx, "anyreel-title", 1, {}, call)).toEqual(cooling);
+    expect(asked).toEqual([false]);
+  });
+});
+
+describe("listedSource", () => {
+  const M3U8 = "https://videoint.anyreel.app/x/y/adp.1936796.m3u8";
+  const episodes = [
+    { id: 1, number: 1, play_url: M3U8, is_playable: true },
+    { id: 7, number: 7, play_url: "", is_playable: false },
+    { id: 8, number: 8, play_url: M3U8.replace("y", "z"), is_playable: false },
+  ];
+
+  it("serves the listed link when the CDN serves it", async () => {
+    expect(await listedSource(episodes, 1, async () => 206)).toEqual({ ok: true, play_url: M3U8 });
+  });
+
+  it("never serves a link the CDN refuses or cannot be asked about", async () => {
+    expect(await listedSource(episodes, 1, async () => 403)).toBeNull();
+    expect(
+      await listedSource(episodes, 1, async () => {
+        throw new Error("timeout");
+      }),
+    ).toBeNull();
+  });
+
+  it("has nothing for an empty, unplayable or missing episode, and asks no CDN", async () => {
+    let probed = 0;
+    const probe = async () => (probed++, 200);
+    expect(await listedSource(episodes, 7, probe)).toBeNull();
+    expect(await listedSource(episodes, 8, probe)).toBeNull();
+    expect(await listedSource(episodes, 99, probe)).toBeNull();
+    expect(await listedSource(undefined, 1, probe)).toBeNull();
+    expect(probed).toBe(0);
   });
 });

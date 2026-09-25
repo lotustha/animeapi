@@ -12,6 +12,7 @@ import {
   getWatchContext,
   getWatchContextResult,
   isHlsSource,
+  listedSource,
   resolveSourceResult,
   servesDirect,
 } from "./scraper/refresh-source.js";
@@ -32,6 +33,7 @@ import type {
   DramaSubtitle,
   Paginated,
   ProviderCatalogue,
+  RefreshSource,
   UpstreamProvider,
 } from "./types.js";
 import { browserCheckCookie, isBrowserCheck } from "./scraper/browser-check.js";
@@ -351,15 +353,21 @@ export class NartoDrama {
       const ctx = page.ctx;
 
       const answer = await resolveSourceResult(ctx, slug, episode, options);
-      if (answer.kind !== "ok") {
+      let resolved: RefreshSource;
+      if (answer.kind === "ok") {
+        resolved = answer.source;
+      } else {
         // The edge stopped accepting the token this context carries. Let go of
         // the context so the retry we are about to invite fetches a new one.
         if (answer.kind === "busy" && answer.reason === "token-refused") {
           void forgetWatchContext(slug, lang);
         }
-        return answer;
+        // The page's own listing may already hold a link the CDN still serves.
+        const listed = await listedSource(ctx.episodes, episode);
+        if (!listed) return answer;
+        Logger.warn(`nartodrama: ${slug} ep ${episode} served from the listing (edge: ${answer.kind} ${answer.reason})`);
+        resolved = listed;
       }
-      const resolved = answer.source;
 
       // After the ladder, whichever rung answered: a forced refresh hands back
       // the same repeated file, so it is checked here and not per rung. The

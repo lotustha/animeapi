@@ -206,6 +206,8 @@ export interface WatchPageContext {
   /** Upstream app backing this title (idrama, melolo, reelshort, …). */
   app: string | null;
   episodes: unknown[];
+  /** The page's `<h1>`. Absent from contexts cached before it was added. */
+  title?: string | null;
 }
 
 export function watchUrl(slug: string, episode: number, lang: string = LANG) {
@@ -365,6 +367,7 @@ async function fetchWatchPageAnswer(
       contextToken: readScriptString(html, "refreshSourceContextToken"),
       edgeBase: readScriptString(html, "refreshSourceEdgeBase") || nartodrama_edge,
       app: readScriptString(html, "movieSourceAppName"),
+      title: html.match(/<h1[^>]*>([^<]+)</)?.[1]?.trim() || null,
       episodes: readEpisodeItems(html),
     },
   };
@@ -416,7 +419,8 @@ export async function getWatchContext(
 // The locale is part of the key. The cached context carries a refreshBase
 // built from it, so reusing an English context for a French request would
 // silently serve the wrong locale's stream.
-const contextKey = (slug: string, lang: string) => `nartodrama:ctx:${lang}:${slug}`;
+// v2: carries `title` (for the alternate-source fallback); v1 entries lack it.
+const contextKey = (slug: string, lang: string) => `nartodrama:ctx:v2:${lang}:${slug}`;
 
 /**
  * Drop a cached context whose token the edge has stopped accepting.
@@ -661,9 +665,11 @@ async function isRefusedByCdn(
 /** Ask a CDN for one byte of a link. The status is the answer; the body is not wanted. */
 export type CdnProbe = (url: string) => Promise<number>;
 
-async function probeCdn(url: string): Promise<number> {
+export async function probeCdn(url: string): Promise<number> {
   const res = await fetch(url, {
-    headers: { "User-Agent": UA, Range: "bytes=0-6" },
+    // identity: a range of a gzipped body is a broken gzip stream (ShortMax's
+    // akamai-static CDN compresses playlists), and reading it throws.
+    headers: { "User-Agent": UA, Range: "bytes=0-15", "Accept-Encoding": "identity" },
     signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
   });
   if (res.ok && /mpegurl/i.test(res.headers.get("content-type") ?? "")) {
@@ -686,7 +692,7 @@ async function probeCdn(url: string): Promise<number> {
  * origin gave, so every caller of the probe reads it as refused.
  */
 export function isFakePlaylist(head: string): boolean {
-  return !head.trimStart().startsWith("#EXTM3U");
+  return !head.replace(/^﻿/, "").trimStart().startsWith("#EXTM3U");
 }
 
 /**

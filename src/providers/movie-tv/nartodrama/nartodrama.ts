@@ -39,6 +39,7 @@ import type {
 } from "./types.js";
 import { browserCheckCookie, isBrowserCheck } from "./scraper/browser-check.js";
 import { nartoBudget } from "./scraper/narto-budget.js";
+import { alternateSource } from "./scraper/alternate-source.js";
 
 const EMPTY_PAGE: Paginated<DramaCard> = { currentPage: 1, hasNextPage: false, results: [] };
 
@@ -371,9 +372,20 @@ export class NartoDrama {
         }
         // The page's own listing may already hold a link the CDN still serves.
         const listed = await listedSource(ctx.episodes, episode);
-        if (!listed) return answer;
-        Logger.warn(`nartodrama: ${slug} ep ${episode} served from the listing (edge: ${answer.kind} ${answer.reason})`);
-        resolved = listed;
+        if (listed) {
+          Logger.warn(`nartodrama: ${slug} ep ${episode} served from the listing (edge: ${answer.kind} ${answer.reason})`);
+          resolved = listed;
+        } else {
+          // Gone on narto — another site may still carry the same app's file.
+          // Never for busy: that is "ask again", and narto may answer next time.
+          const alternate =
+            answer.kind === "gone"
+              ? await alternateSource(ctx.app, ctx.title || slug, ctx.episodes.length, episode)
+              : null;
+          if (!alternate) return answer;
+          Logger.warn(`nartodrama: ${slug} ep ${episode} served from ${alternate.site} (edge: gone ${answer.reason})`);
+          resolved = { ok: true, play_url: alternate.url };
+        }
       }
 
       // After the ladder, whichever rung answered: a forced refresh hands back

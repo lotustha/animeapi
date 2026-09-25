@@ -400,6 +400,7 @@ describe("a link narto can no longer re-sign", () => {
     expect(isFakePlaylist("/e/s/ey")).toBe(true);
     expect(isFakePlaylist("shortmax-edge: link expired")).toBe(true);
     expect(isFakePlaylist("#EXTM3U")).toBe(false);
+    expect(isFakePlaylist("﻿#EXTM3U\n#EXT")).toBe(false);
   });
 
   it("is gone, not a dead link, when the forced refresh is also refused with 410", async () => {

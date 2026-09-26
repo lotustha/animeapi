@@ -131,7 +131,8 @@ fi
 # ── c. bridge ─────────────────────────────────────────────────────────────
 # setsid: its own session, so an ssh drop (SIGHUP to our group) cannot take
 # it down mid-handover. timeout: a hard ceiling if this script dies before
-# step g — SIGTERM, the same graceful drain step g and pm2 use.
+# step g — SIGTERM, the same graceful drain step g uses (pm2 itself sends
+# SIGINT, which the app drains on too; see ecosystem.config.cjs).
 # All three fds are redirected: appleboy/ssh-action waits for every fd tied
 # to the session to close, and a bridge holding stdout would hang the job.
 # PORT is set inline, not exported — `pm2 restart --update-env` below would

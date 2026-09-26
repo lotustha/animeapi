@@ -40,6 +40,7 @@ import type {
 import { browserCheckCookie, isBrowserCheck } from "./scraper/browser-check.js";
 import { nartoBudget } from "./scraper/narto-budget.js";
 import { alternateSource } from "./scraper/alternate-source.js";
+import { inc } from "../../../core/counters.js";
 
 const EMPTY_PAGE: Paginated<DramaCard> = { currentPage: 1, hasNextPage: false, results: [] };
 
@@ -362,6 +363,8 @@ export class NartoDrama {
         ? ({ kind: "ok", source: listedFirst } as const)
         : await resolveSourceResult(ctx, slug, episode, options);
       let resolved: RefreshSource;
+      // Set only by the two fallback rungs below; unset means narto answered.
+      let servedBy: string | undefined;
       if (answer.kind === "ok") {
         resolved = answer.source;
       } else {
@@ -374,16 +377,20 @@ export class NartoDrama {
         const listed = await listedSource(ctx.episodes, episode);
         if (listed) {
           Logger.warn(`nartodrama: ${slug} ep ${episode} served from the listing (edge: ${answer.kind} ${answer.reason})`);
+          inc("listing_served");
+          servedBy = "listing";
           resolved = listed;
         } else {
           // Gone on narto — another site may still carry the same app's file.
           // Never for busy: that is "ask again", and narto may answer next time.
           const alternate =
             answer.kind === "gone"
-              ? await alternateSource(ctx.app, ctx.title || slug, ctx.episodes.length, episode)
+              ? await alternateSource(ctx.app, ctx.title || slug, ctx.episodes.length, episode, lang)
               : null;
           if (!alternate) return answer;
           Logger.warn(`nartodrama: ${slug} ep ${episode} served from ${alternate.site} (edge: gone ${answer.reason})`);
+          inc(`alt_served_${alternate.site}`);
+          servedBy = alternate.site;
           resolved = { ok: true, play_url: alternate.url };
         }
       }
@@ -456,6 +463,7 @@ export class NartoDrama {
         provider: ctx.app || "",
         sources,
         subtitles,
+        servedBy,
       };
     } catch (err) {
       Logger.error(err);

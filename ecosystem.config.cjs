@@ -31,15 +31,22 @@
  * to close Chrome + margin, so pm2 only SIGKILLs a process that ignored its
  * own deadline.
  *
- * kill_signal SIGTERM, not pm2's default SIGINT: chrome-launcher (inside
- * puppeteer-real-browser) registers a SIGINT listener that calls
- * process.exit(130) at once, which cut the drain short as soon as a
+ * No kill_signal here, on purpose. An earlier version set
+ * `kill_signal: "SIGTERM"` believing pm2 would stop the app with it; pm2 6
+ * IGNORES a per-app kill_signal — lib/God/Methods.js (~line 230) always sends
+ * cst.KILL_SIGNAL, i.e. env PM2_KILL_SIGNAL || SIGINT (as found in review,
+ * 2026-09-26; pm2 is not a dependency of this repo, so check the VPS's global
+ * install when upgrading pm2).
+ * So `pm2 restart/stop/delete` sends SIGINT, and a field that looked like
+ * protection was only misleading. The drain survives SIGINT anyway:
+ * src/index.ts handles SIGINT and SIGTERM alike, and src/core/lib/browser.ts
+ * passes handleSIGINT: false to chrome-launcher (inside
+ * puppeteer-real-browser), whose own SIGINT listener otherwise called
+ * process.exit(130) in the same tick and cut the drain short once a
  * CF-bypass or vidcore/vidfast request had launched Chrome (review,
- * 2026-09-26). src/core/lib/browser.ts disables that listener too; SIGTERM
- * keeps any other library's Ctrl-C handler out of the deploy path. No
- * runtime dependency exits on SIGTERM (grep of node_modules, 2026-09-26:
- * only tsx/vite/vitest/ts-node/srvx CLIs register one; signal-exit re-kills
- * only when it is the sole listener, and src/index.ts is always another).
+ * 2026-09-26). handover.sh signals the bridge itself with SIGTERM. Any NEW
+ * dependency that exits on SIGINT would bring the cut drain back — that is
+ * the thing to check when adding one, not this file.
  *
  * treekill false: pm2's default signals every descendant of the Bun pid at
  * once — including those persistent Chromes, which then die under the very
@@ -81,7 +88,6 @@ module.exports = {
       autorestart: true,
       watch: false,
       kill_timeout: 130000,
-      kill_signal: "SIGTERM",
       treekill: false,
       env: {
         PORT: "3001",

@@ -15,6 +15,7 @@ import {
 } from "./refresh-source.js";
 import type { EdgeAnswer, WatchPageContext } from "./refresh-source.js";
 import type { RefreshSource } from "../types.js";
+import { snapshot } from "../../../../core/counters.js";
 
 // The cached answer from narto can be `ok: true` with a link whose signature
 // lapsed weeks ago. These pin the check that sends such an answer to the repair
@@ -501,5 +502,27 @@ describe("a lapsed Tencent-signed link", () => {
       reason: "expired",
     });
     expect(asked).toEqual([false, true]);
+  });
+});
+
+// /health's `counters` are only worth reading if the events really bump them;
+// a test that inc()s a made-up name proves the snapshot, not the wiring
+// (review, 2026-09-26). These pin the two counters this ladder owns.
+describe("resolveSourceResult counters", () => {
+  const ctx = { refreshBase: "https://n/detail/watch/s", contextToken: null, edgeBase: "https://e", app: null, episodes: [] };
+  const count = (name: string) => snapshot()[name] ?? 0;
+
+  it("counts a forced refresh that hands back a 410 link as forced_dead", async () => {
+    const dead: EdgeAnswer = { kind: "ok", source: { ok: true, direct_play_url: "https://relay/e/m/counted" } };
+    const before = count("forced_dead");
+    await resolveSourceResult(ctx, "counter-forced-dead", 1, {}, async () => dead, async () => 410);
+    expect(count("forced_dead")).toBe(before + 1);
+  });
+
+  it("counts a ladder that ends with nothing as no_source", async () => {
+    const gone: EdgeAnswer = { kind: "gone", reason: "upstream-refused" };
+    const before = count("no_source");
+    await resolveSourceResult(ctx, "counter-no-source", 1, {}, async () => gone);
+    expect(count("no_source")).toBe(before + 1);
   });
 });

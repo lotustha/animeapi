@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { Elysia } from "elysia";
+import { snapshot } from "./counters.js";
 
 /**
  * GET /health — which process answered, and what code it runs.
@@ -20,6 +21,10 @@ import { Elysia } from "elysia";
  * answer would report a pid that is already gone. Kept in its own plugin so
  * the test can mount it without pulling in every provider (puppeteer,
  * firebase-admin).
+ *
+ * `counters` (src/core/counters.ts) rides along: event counts since this pid
+ * booted — alternate sites serving a gone episode, forced refreshes that came
+ * back dead, episodes with no source. Read, never reset, by this route.
  */
 
 /** When this process loaded — lets a human see a restart actually happened. */
@@ -52,7 +57,7 @@ export const healthRoutes = new Elysia({ name: "health" }).get(
   "/health",
   ({ set }) => {
     set.headers["cache-control"] = "no-store";
-    return { ok: true, pid: process.pid, bootedAt, commit };
+    return { ok: true, pid: process.pid, bootedAt, commit, counters: snapshot() };
   },
   {
     detail: {

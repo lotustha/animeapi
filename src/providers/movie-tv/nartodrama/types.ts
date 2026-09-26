@@ -167,6 +167,13 @@ export interface DramaStream {
   provider: string;
   sources: DramaSource[];
   subtitles: DramaSubtitle[];
+  /**
+   * Which fallback rung served this episode, when narto's edge did not:
+   * "listing" (the watch page's own list) or an alternate site's name
+   * ("vibeshort", "reelall-dramabox", …). Absent when narto answered. Lets a
+   * caller or the route cache treat a borrowed link differently (2026-09-26).
+   */
+  servedBy?: string;
 }
 
 export interface Paginated<T> {

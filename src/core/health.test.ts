@@ -1,5 +1,6 @@
 import { Elysia } from "elysia";
 import { describe, expect, it } from "vitest";
+import { inc, snapshot } from "./counters.js";
 import { healthRoutes } from "./health.js";
 
 // scripts/deploy/handover.sh greps `"pid":<n>` out of this answer to tell the
@@ -22,6 +23,18 @@ describe("GET /health", () => {
   it("keeps the compact `\"pid\":<digits>` form the shell script matches", async () => {
     const text = await (await app.handle(new Request("http://localhost/health"))).text();
     expect(text).toContain(`"pid":${process.pid}`);
+  });
+
+  it("carries the in-process counters as a plain object", async () => {
+    // A name no other test touches: counters live for the whole test process.
+    const name = `health_test_${Math.random().toString(36).slice(2)}`;
+    const before = (await (await app.handle(new Request("http://localhost/health"))).json()).counters;
+    expect(before[name]).toBeUndefined();
+    inc(name);
+    inc(name);
+    const body = await (await app.handle(new Request("http://localhost/health"))).json();
+    expect(body.counters[name]).toBe(2);
+    expect(snapshot()[name]).toBe(2);
   });
 
   it("reports the same boot time on every call", async () => {

@@ -1,5 +1,6 @@
 import { Cache } from "../../../../core/cache.js";
 import { Logger } from "../../../../core/logger.js";
+import { inc } from "../../../../core/counters.js";
 import { nartodrama, nartodrama_edge } from "../../../origins.js";
 import { refreshSourceSchema, episodeItemsSchema } from "../types.js";
 import type { RefreshSource } from "../types.js";
@@ -861,6 +862,7 @@ export async function resolveSourceResult(
     const expired = (): SourceMiss => {
       stamp(provenDeadAt, tag);
       Logger.warn(`nartodrama: ${slug} ep ${episode} — forced refresh returned a dead link (410)`);
+      inc("forced_dead");
       return { kind: "gone", reason: "expired" };
     };
 
@@ -899,6 +901,7 @@ export async function resolveSourceResult(
 
     const verdict = missVerdict(rungs);
     Logger.warn(`nartodrama: no source for ${slug} ep ${episode} — ${verdict.kind} (${verdict.reason})`);
+    inc("no_source");
     return verdict;
   } catch (err) {
     Logger.error(err);

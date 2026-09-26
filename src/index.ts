@@ -17,9 +17,9 @@ app.listen(port, () => {
 });
 
 /**
- * Graceful stop on SIGTERM (pm2's kill_signal in ecosystem.config.cjs, and
- * handover.sh / `timeout` for the bridge) and SIGINT (the hand-started pm2
- * app before adoption, Ctrl-C).
+ * Graceful stop on SIGINT (what pm2 6 always sends — it ignores a per-app
+ * kill_signal, see ecosystem.config.cjs — and Ctrl-C) and SIGTERM
+ * (handover.sh / `timeout` for the bridge).
  *
  * Without a handler Bun exits the instant pm2 signals it: every in-flight
  * request dies with it (discover/stream-check jobs saw "fetch failed"), and
@@ -37,12 +37,12 @@ app.listen(port, () => {
  * normally, a fresh connection after stop() was refused, and an idle
  * keep-alive socket did NOT hold the drain open.
  *
- * Deploys signal with SIGTERM, not SIGINT: chrome-launcher (under
- * puppeteer-real-browser) registered its own SIGINT listener that ran
- * process.exit(130) in the same tick as this handler, killing the drain as
- * soon as a CF-bypass or vidcore/vidfast request had booted Chrome.
- * src/core/lib/browser.ts turns that listener off; staying off SIGINT keeps
- * any other library's Ctrl-C handler out of the way as well. Step order,
+ * SIGINT is safe only because src/core/lib/browser.ts turns off
+ * chrome-launcher's own SIGINT listener (under puppeteer-real-browser), which
+ * ran process.exit(130) in the same tick as this handler and killed the drain
+ * as soon as a CF-bypass or vidcore/vidfast request had booted Chrome. pm2
+ * sends SIGINT regardless of config, so that switch is what the drain rests
+ * on; handover.sh still uses SIGTERM for the bridge. Step order,
  * the 125s ceiling and the Chrome cleanup live in src/core/shutdown.ts.
  */
 const shutdown = createShutdown({

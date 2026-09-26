@@ -11,6 +11,7 @@ import { musicRoutes } from "./providers/music/route.js";
 import { streamRoutes } from "./providers/stream/route.js";
 import { cronRoutes } from "./routes/cron.js";
 import { adminRoutes } from "./routes/admin.js";
+import { healthRoutes } from "./core/health.js";
 
 import { isNode } from "./core/runtime.js";
 import { env } from "./core/runtime.js";
@@ -91,6 +92,10 @@ export async function createApp() {
         },
       },
     )
+    // Ahead of the providers so no provider-scoped hook ever wraps it. The
+    // response cache is opt-in per handler (Cache.get/set), and this handler
+    // never calls it — see core/health.ts.
+    .use(healthRoutes)
     .use(movieTvRoutes)
     .use(animeRoutes)
     .use(mangaRoutes)

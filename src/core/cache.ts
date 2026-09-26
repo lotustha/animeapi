@@ -6,7 +6,7 @@ import { env, isBun } from "./runtime.js";
 import { Logger } from "./logger.js";
 
 // File-based cache imports (works on Node.js / cPanel)
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -180,7 +180,23 @@ function fileSet(key: string, value: string, ttl: number): void {
     ttl,
     createdAt: Date.now(),
   };
-  writeFileSync(filePath, JSON.stringify(entry), "utf-8");
+  // Write beside the target, then rename over it. rename(2) is atomic within
+  // a filesystem, so a reader sees the old entry or the new one — never half
+  // of one. A plain writeFileSync truncates first; a read landing mid-write
+  // got "" or a torn JSON, which fileGet reports as a miss and the handler
+  // then re-scrapes. Since the zero-downtime deploys (2026-09-26) two
+  // processes share this directory for a couple of minutes on every deploy,
+  // so the pid in the temp name keeps their writes to the same key apart.
+  // Sweeps below only ever look at *.json, so a stray *.tmp is never served
+  // or counted.
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmpPath, JSON.stringify(entry), "utf-8");
+    renameSync(tmpPath, filePath);
+  } catch (err) {
+    try { unlinkSync(tmpPath); } catch {}
+    throw err;
+  }
 }
 
 function fileDelete(key: string): boolean {
@@ -196,8 +212,18 @@ function getAllCacheFiles(dir: string): string[] {
   let results: string[] = [];
   if (!existsSync(dir)) return results;
   for (const file of readdirSync(dir)) {
+    // An in-progress fileSet temp (`<name>.json.<pid>.tmp`). Skipped before
+    // the stat: it may be renamed away between readdir and stat, and a purge
+    // must not delete a write another process is about to publish.
+    if (file.endsWith(".tmp")) continue;
     const fullPath = join(dir, file);
-    if (statSync(fullPath).isDirectory()) {
+    let isDir: boolean;
+    try {
+      isDir = statSync(fullPath).isDirectory();
+    } catch {
+      continue; // removed by a concurrent fileGet/fileDelete since readdir
+    }
+    if (isDir) {
       results = results.concat(getAllCacheFiles(fullPath));
     } else if (file.endsWith(".json")) {
       results.push(fullPath);

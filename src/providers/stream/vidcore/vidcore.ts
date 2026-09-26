@@ -1,5 +1,5 @@
 import axios from "axios";
-import { connect } from "puppeteer-real-browser";
+import { launchBrowser } from "../../../core/lib/browser.js";
 
 const BASE_URL = "https://vidcore.net";
 const SUB_URL = "https://sub.wyzie.io/search";
@@ -14,7 +14,7 @@ async function getBrowser() {
     console.log("[Vidcore] Booting persistent background Chrome...");
     if (browserInstance) await browserInstance.close().catch(() => {});
 
-    const { browser, page } = await connect({
+    const { browser, page } = await launchBrowser({
       headless: false,
       turnstile: true,
       disableXvfb: false,

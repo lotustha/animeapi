@@ -24,6 +24,7 @@ const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 
 type SqliteDb = {
   run: (sql: string) => void;
+  close: () => void;
   query: (sql: string) => {
     get: (...params: unknown[]) => any;
     all: (...params: unknown[]) => any[];
@@ -51,6 +52,15 @@ function init(): SqliteDb | null {
     if (dir) require("node:fs").mkdirSync(dir, { recursive: true });
 
     const handle = new Database(DB_PATH, { create: true });
+    // FIRST, before anything that takes a lock. Zero-downtime deploys
+    // (scripts/deploy/handover.sh, 2026-09-26) run two processes on this file
+    // for a couple of minutes: the bridge boots while the old pm2 process is
+    // still writing, and pm2's new one boots while the bridge is. SQLite's
+    // default busy timeout is 0, so the WAL pragma, dropLegacySchema or a
+    // CREATE TABLE that meets the other writer's lock throws SQLITE_BUSY at
+    // once — the catch below then leaves `db` null and that process scrapes
+    // for its whole life. 5s of waiting is far longer than any write here.
+    handle.run("PRAGMA busy_timeout = 5000");
     handle.run("PRAGMA journal_mode = WAL");
 
     // A series is stored PER LOCALE, because upstream returns a different
@@ -284,5 +294,25 @@ export function storeStats() {
   } catch (err) {
     Logger.error(err);
     return { available: false, series: 0, episodes: 0 };
+  }
+}
+
+/**
+ * Close the database on shutdown (src/index.ts, after the HTTP drain).
+ *
+ * Closing the last connection checkpoints the WAL back into the main file,
+ * so a clean exit does not leave the next process — or the bridge still
+ * running beside it during a deploy — replaying a long -wal file. `initialised`
+ * stays true, so anything that still calls in after this gets `null` and
+ * falls through to scraping instead of reopening the file mid-exit.
+ */
+export function closeStore(): void {
+  if (!db) return;
+  const handle = db;
+  db = null;
+  try {
+    handle.close();
+  } catch (err) {
+    Logger.error(err);
   }
 }

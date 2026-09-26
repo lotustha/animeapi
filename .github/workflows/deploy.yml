@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
 
+# Two pushes in quick succession used to run two deploys at once on the same
+# checkout. handover.sh runs a bridge process on :3001 for a few minutes, and
+# two of them interleaving with two pm2 restarts could strand a bridge on old
+# code. Queue instead; never cancel one mid-handover.
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -14,13 +22,15 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
+          # A handover can legitimately take several minutes: the old process
+          # drains for up to 125s and the bridge for up to 125s more. The
+          # action's default 10m is close to that worst case.
+          command_timeout: 15m
+          # --ff-only: a diverged checkout fails the pull loudly instead of
+          # merging on the box. Hand-edited tracked files are no longer
+          # stashed away silently — handover.sh refuses to deploy over them
+          # (untracked cache/ and .well-known/ are fine). handover.sh
+          # replaces `pm2 restart`: a bridge process holds :3001 while pm2
+          # restarts, so no request is refused or cut (see the script).
           script: |
-            cd /www/wwwroot/api.mugenstream.fun
-            # Hand-edits on the VPS abort `git pull` and silently block every
-            # deploy. Park them in the stash (recoverable via `git stash list`)
-            # so the pull always goes through.
-            git stash
-            git pull origin main
-            # pm2 runs `bun run src/index.ts` with watch disabled — the new
-            # code isn't served until the process restarts.
-            pm2 restart mugen-api
+            cd /www/wwwroot/api.mugenstream.fun && git pull --ff-only origin main && bash scripts/deploy/handover.sh

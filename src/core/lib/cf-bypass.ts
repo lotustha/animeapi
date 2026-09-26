@@ -7,7 +7,7 @@ export const cf_signatures = [
   "__cf_chl_tk",
 ];
 
-import { connect } from "puppeteer-real-browser";
+import { launchBrowser } from "./browser.js";
 import { Logger } from "../logger.js";
 
 interface ClearanceResult {
@@ -47,7 +47,7 @@ export async function getCloudflareClearance(targetUrl: string): Promise<Clearan
       Logger.info("Cold start: Launching persistent browser...");
       if (browserInstance) await browserInstance.close().catch(() => {});
 
-      const { browser, page } = await connect({
+      const { browser, page } = await launchBrowser({
         headless: false,
         turnstile: true,
         disableXvfb: false,

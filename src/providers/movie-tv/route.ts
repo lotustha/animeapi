@@ -4,6 +4,7 @@ import { yFlixRoutes } from "./yflix/route.js";
 import { himoviesRoutes } from "./himovies/route.js";
 import { flixhqRoutes } from "./flixhq/route.js";
 import { nartoDramaRoutes } from "./nartodrama/route.js";
+import { movieBoxRoutes } from "./moviebox/route.js";
 
 export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
   .use(primesrcRoutes)
@@ -11,6 +12,7 @@ export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
   .use(himoviesRoutes)
   .use(flixhqRoutes)
   .use(nartoDramaRoutes)
+  .use(movieBoxRoutes)
 
   // ─── Overview Endpoint ────────────────────────────────────────────────────────
   .get(
@@ -18,7 +20,7 @@ export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
     () => ({
       service: "movie-tv",
       description: "Unified Movie & TV API — provider-isolated route architecture",
-      providers: ["primesrc", "yflix", "himovies", "flixhq", "nartodrama"],
+      providers: ["primesrc", "yflix", "himovies", "flixhq", "nartodrama", "moviebox"],
       endpoints: {
         primesrc: [
           "GET /movie-tv/primesrc/movie/:tmdbid   → Get movie sources",
@@ -66,6 +68,12 @@ export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
           "GET /movie-tv/nartodrama/tag/:tag?page=1   → Browse by tag",
           "GET /movie-tv/nartodrama/info/:slug        → Series info & episode list",
           "GET /movie-tv/nartodrama/watch/:slug/:episode → Episode stream sources",
+        ],
+        moviebox: [
+          "GET /movie-tv/moviebox/trending?page=1    → Trending movies & TV",
+          "GET /movie-tv/moviebox/search/:query?type=all|movie|tv → Search",
+          "GET /movie-tv/moviebox/info/:id           → Title info, seasons, dubs, cast",
+          "GET /movie-tv/moviebox/watch/:id?season=&episode= → MP4 sources + subtitles",
         ],
       },
     }),

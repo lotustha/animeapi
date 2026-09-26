@@ -38,4 +38,9 @@ export const himovies = "https://himovies.to";
 // not the main domain — nginx there 403s /refresh-source outright.
 export const nartodrama = "https://narto-drama.com";
 export const nartodrama_edge = "https://edge.narto-drama.com";
+// MovieBox web front-end and its aoneroom BFF. The play endpoint only returns
+// streams when the Referer is `${moviebox}/movies/<detailPath>`, and the video
+// CDN 429s without a moviebox Referer.
+export const moviebox = "https://themoviebox.xyz";
+export const moviebox_api = "https://h5-api.aoneroom.com/wefeed-h5api-bff";
 export const tidal = "https://api.tidal.com/v1";

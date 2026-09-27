@@ -9,6 +9,24 @@ export const envelope = <T extends z.ZodTypeAny>(data: T) =>
 // raw detail, suggest) — only the envelope is checked.
 export const rawSchema = envelope(z.unknown());
 
+// Just enough of /home and /subject/filter to add a row to the home page.
+export const homeRowsSchema = z
+  .object({
+    operatingList: z.array(z.object({ type: z.string(), position: z.number() }).loose()),
+  })
+  .loose();
+export const filterItemsSchema = z.object({ items: z.array(z.unknown()).nullish() }).loose();
+
+/** The site's movie/TV browse filters; "All" leaves a facet open. */
+export type MovieBoxFilter = {
+  type: MovieBoxType;
+  classify?: string; // "All" | "Hindi dub" | …
+  country?: string;
+  genre?: string;
+  year?: string;
+  sort?: string; // "Latest" | …
+};
+
 const imageSchema = z.object({ url: z.string() }).loose();
 
 // ─── Subject card (search, trending, filter, detail) ────────────────────────

@@ -42,7 +42,8 @@ export const movieBoxRoutes = new Elysia({ prefix: "/moviebox" })
       prefix + "/watch/{id}                      → movie",
       prefix + "/watch/{id}?season=1&episode=1   → tv episode",
       prefix + "/watch/{id}?audio=hi              → a dub (langCode from info.dubs)",
-      prefix + "/home                             → raw home rows",
+      prefix + "/home                             → raw home rows (Bollywood first)",
+      prefix + "/filter?type=movie&country=India&sort=Latest&page=1 → raw browse filter",
       prefix + "/ranking/{id}?page=1&perPage=24   → raw ranking list",
       prefix + "/detail/{subjectId}               → raw detail",
       prefix + "/suggest/{query}?perPage=12       → raw search suggestions",
@@ -51,8 +52,25 @@ export const movieBoxRoutes = new Elysia({ prefix: "/moviebox" })
 
   // ─── Raw MovieBox payloads ─────────────────────────────────────────────────
   .get("/home", async ({ status }) => {
-    const data = await cachedRaw("moviebox:home", 1800, () => MovieBox.home());
+    const data = await cachedRaw("moviebox:home:v2", 1800, () => MovieBox.home());
     return data ?? status(502, { message: "Home unavailable" });
+  })
+
+  .get("/filter", async ({ query, status }) => {
+    const filter = {
+      type: query?.type === "tv" ? ("tv" as const) : ("movie" as const),
+      classify: query?.classify as string | undefined,
+      country: query?.country as string | undefined,
+      genre: query?.genre as string | undefined,
+      year: query?.year as string | undefined,
+      sort: query?.sort as string | undefined,
+    };
+    const page = parseInt(query?.page as string) || 1;
+    const perPage = Math.min(parseInt(query?.perPage as string) || 24, 50);
+    const facets = [filter.classify, filter.country, filter.genre, filter.year, filter.sort];
+    const key = `moviebox:filter:${filter.type}:${facets.map((f) => f || "All").join(":")}:${page}:${perPage}`;
+    const data = await cachedRaw(key, 3600, () => MovieBox.filter(filter, page, perPage));
+    return data ?? status(502, { message: "Filter unavailable" });
   })
 
   .get(

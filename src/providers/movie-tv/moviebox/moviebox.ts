@@ -5,11 +5,14 @@ import { moviebox, moviebox_api } from "../../origins.js";
 import {
   captionSchema,
   detailSchema,
+  filterItemsSchema,
+  homeRowsSchema,
   playSchema,
   rawSchema,
   searchSchema,
   trendingSchema,
   type MovieBoxDub,
+  type MovieBoxFilter,
   type MovieBoxInfo,
   type MovieBoxItem,
   type MovieBoxStream,
@@ -96,6 +99,13 @@ const toItem = (s: {
 
 const splitList = (value?: string) => (value ? value.split(",").filter(Boolean) : []);
 
+// Rows added to the top of /home, in order. Each is one of the site's browse
+// filters, the same list MovieBox's own "Categories" tiles open.
+const HOME_ROWS: { title: string; filter: MovieBoxFilter }[] = [
+  // themoviebox.xyz/web/film?type=/home/movieFilter&tabId=2&country=India&sort=Latest
+  { title: "Bollywood", filter: { type: "movie", country: "India", sort: "Latest" } },
+];
+
 export class MovieBox {
   /** Authenticated BFF call. Retries once with a fresh session if the token was refused. */
   private static async api(
@@ -140,9 +150,66 @@ export class MovieBox {
   // Raw passthroughs for MovieBox-shaped clients (the Noon Flix TV app): they
   // keep the upstream's payloads verbatim so the client models never change.
 
-  /** Home page rows (`operatingList`: banners, subject rails, …). */
-  static home() {
-    return this.raw("/home");
+  /**
+   * Home page rows (`operatingList`: banners, subject rails, …), with
+   * HOME_ROWS placed first after the banner. Added rows copy the shape of the
+   * site's own subject rows, so clients render them like any other.
+   */
+  static async home() {
+    const [home, ...extra] = await Promise.all([
+      this.raw("/home"),
+      ...HOME_ROWS.map((r) => this.filter(r.filter)),
+    ]);
+    const parsed = homeRowsSchema.safeParse(home);
+    if (!parsed.success) return home;
+
+    const rows = parsed.data.operatingList;
+    const template = rows.find((r) => r.type === "SUBJECTS_MOVIE");
+    const bannerAt = rows.findIndex((r) => r.type === "BANNER");
+    const position = bannerAt >= 0 ? rows[bannerAt].position : 1;
+
+    const added = HOME_ROWS.flatMap((row, i) => {
+      const subjects = filterItemsSchema.safeParse(extra[i]).data?.items ?? [];
+      if (!template || subjects.length === 0) return [];
+      return [
+        {
+          ...template,
+          title: row.title,
+          subjects,
+          position,
+          opId: `mugen-${row.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+          url: "",
+          filters: [],
+          genreTopId: "",
+          detailPath: "",
+          // Where "see all" leads: GET /movie-tv/moviebox/filter with these facets.
+          filter: row.filter,
+        },
+      ];
+    });
+
+    rows.splice(bannerAt + 1, 0, ...added);
+    return parsed.data;
+  }
+
+  /**
+   * One page of the site's movie/TV browse filter (`pager`, `items`), the page
+   * behind /web/film?type=/home/movieFilter. Pages are 1-based.
+   */
+  static filter(f: MovieBoxFilter, page = 1, perPage = 24) {
+    return this.raw("/subject/filter", {
+      method: "POST",
+      body: {
+        page,
+        perPage,
+        channelId: f.type === "tv" ? 2 : 1,
+        classify: f.classify || "All",
+        country: f.country || "All",
+        genre: f.genre || "All",
+        year: f.year || "All",
+        sort: f.sort || "Latest",
+      },
+    });
   }
 
   /** One ranking list (`title`, `subjectList`, `pager`). Pages are 1-based. */

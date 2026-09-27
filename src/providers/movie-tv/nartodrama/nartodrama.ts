@@ -415,8 +415,21 @@ export class NartoDrama {
       const repeats = duplicateOfPrevious(slug, episode, keys, ctx.episodes);
       rememberEpisodeFiles(slug, episode, keys);
       if (repeats !== null) {
-        Logger.warn(`nartodrama: ${slug} ep ${episode} is the same file as ep ${repeats} — withheld`);
-        return { kind: "gone", reason: "duplicate" };
+        // The real episode may still exist on another site that carries the
+        // same app. Tried here, and not only on a "gone" edge answer: narto
+        // serving the previous episode's file IS a gone answer for this one.
+        const alternate = await alternateSource(ctx.app, ctx.title || slug, ctx.episodes.length, episode, lang);
+        const altKeys = alternate ? fileKeys([alternate.url]) : [];
+        if (alternate && duplicateOfPrevious(slug, episode, altKeys, ctx.episodes) === null) {
+          Logger.warn(`nartodrama: ${slug} ep ${episode} repeated ep ${repeats} on narto; served from ${alternate.site}`);
+          inc(`alt_served_${alternate.site}`);
+          rememberEpisodeFiles(slug, episode, altKeys);
+          servedBy = alternate.site;
+          resolved = { ok: true, play_url: alternate.url };
+        } else {
+          Logger.warn(`nartodrama: ${slug} ep ${episode} is the same file as ep ${repeats} — withheld`);
+          return { kind: "gone", reason: "duplicate" };
+        }
       }
 
       // Same choice as servedUrl(): the link the probes judged is the one served.

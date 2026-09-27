@@ -6,13 +6,17 @@ import {
   captionSchema,
   detailSchema,
   playSchema,
+  rawSchema,
   searchSchema,
   trendingSchema,
+  type MovieBoxDub,
   type MovieBoxInfo,
   type MovieBoxItem,
   type MovieBoxStream,
+  type MovieBoxSubtitle,
   type MovieBoxType,
 } from "./types.js";
+import { cleanResults, mergeSubtitles, sameCut } from "./scraper/clean.js";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
@@ -120,6 +124,47 @@ export class MovieBox {
     return json;
   }
 
+  /** `data` of a BFF call in MovieBox's own shape, or null on failure. */
+  private static async raw(
+    path: string,
+    init?: { method?: "GET" | "POST"; body?: unknown },
+  ): Promise<unknown> {
+    const parsed = rawSchema.safeParse(await this.api(path, init));
+    if (!parsed.success || parsed.data.code !== 0 || parsed.data.data == null) {
+      Logger.warn(`moviebox: ${path} returned an unexpected shape`);
+      return null;
+    }
+    return parsed.data.data;
+  }
+
+  // Raw passthroughs for MovieBox-shaped clients (the Noon Flix TV app): they
+  // keep the upstream's payloads verbatim so the client models never change.
+
+  /** Home page rows (`operatingList`: banners, subject rails, …). */
+  static home() {
+    return this.raw("/home");
+  }
+
+  /** One ranking list (`title`, `subjectList`, `pager`). Pages are 1-based. */
+  static ranking(id: string, page = 1, perPage = 24) {
+    return this.raw(
+      `/ranking-list/content?id=${encodeURIComponent(id)}&page=${page}&perPage=${perPage}`,
+    );
+  }
+
+  /** Full detail (`subject`, `stars`, `resource`, …) keyed by subjectId. */
+  static detail(subjectId: string) {
+    return this.raw(`/detail?subjectId=${encodeURIComponent(subjectId)}`);
+  }
+
+  /** Search-as-you-type words (`items`). */
+  static suggest(keyword: string, perPage = 12) {
+    return this.raw("/subject/search-suggest", {
+      method: "POST",
+      body: { keyword, perPage },
+    });
+  }
+
   static async search(query: string, page = 1, type: MovieBoxType | "all" = "all") {
     const subjectType = type === "movie" ? 1 : type === "tv" ? 2 : 0;
     const parsed = searchSchema.safeParse(
@@ -132,9 +177,9 @@ export class MovieBox {
       Logger.warn(`moviebox: search "${query}" returned an unexpected shape`);
       return { page, hasNextPage: false, results: [] as MovieBoxItem[] };
     }
-    const results = (parsed.data.data.items ?? [])
-      .map(toItem)
-      .filter((i): i is MovieBoxItem => i !== null);
+    const results = cleanResults(
+      (parsed.data.data.items ?? []).map(toItem).filter((i): i is MovieBoxItem => i !== null),
+    );
     return { page, hasNextPage: parsed.data.data.pager.hasMore, results };
   }
 
@@ -147,9 +192,9 @@ export class MovieBox {
       Logger.warn("moviebox: trending returned an unexpected shape");
       return { page, hasNextPage: false, results: [] as MovieBoxItem[] };
     }
-    const results = (parsed.data.data.subjectList ?? [])
-      .map(toItem)
-      .filter((i): i is MovieBoxItem => i !== null);
+    const results = cleanResults(
+      (parsed.data.data.subjectList ?? []).map(toItem).filter((i): i is MovieBoxItem => i !== null),
+    );
     return { page, hasNextPage: parsed.data.data.pager?.hasMore ?? false, results };
   }
 
@@ -189,6 +234,7 @@ export class MovieBox {
         language: d.lanName,
         langCode: d.lanCode,
         original: d.original ?? false,
+        kind: d.type === 1 ? ("hardsub" as const) : ("audio" as const),
       })),
       cast: (stars ?? []).map((s) => ({
         name: s.name,
@@ -200,25 +246,40 @@ export class MovieBox {
   }
 
   /**
-   * Stream sources for a movie (season/episode 0) or one TV episode.
-   * The returned MP4 URLs are signed and short-lived; they are proxied so the
-   * CDN sees the moviebox Referer it insists on.
+   * The language version of `info` to play for `audio` (a langCode such as
+   * "hi", or a dub's id). A dubbed track wins over a hardsub one of the same
+   * language. Without `audio` it is the title itself. Null when nothing matches.
    */
-  static async watch(
-    info: Pick<MovieBoxInfo, "id" | "subjectId" | "type">,
-    season = 0,
-    episode = 0,
-  ): Promise<MovieBoxStream | null> {
-    const se = info.type === "movie" ? 0 : season;
-    const ep = info.type === "movie" ? 0 : episode;
+  static pickDub(info: MovieBoxInfo, audio?: string): MovieBoxDub | null {
+    if (!audio) return info.dubs.find((d) => d.subjectId === info.subjectId) ?? null;
+    const code = audio.toLowerCase();
+    return (
+      info.dubs.find((d) => d.id === audio) ??
+      info.dubs.find((d) => d.langCode.toLowerCase() === code && d.kind === "audio") ??
+      info.dubs.find((d) => d.langCode.toLowerCase() === code) ??
+      null
+    );
+  }
+
+  /**
+   * One language version's MP4 streams and the subtitles filed with them.
+   * Null when the version has nothing to play.
+   */
+  private static async play(
+    target: { id: string; subjectId: string },
+    se: number,
+    ep: number,
+    withSubtitles = true,
+  ) {
+    const { id, subjectId } = target;
     // The play endpoint answers an empty stream list unless the Referer is this
     // title's page on the moviebox site.
-    const referer = `${moviebox}/movies/${info.id}`;
-    const query = `subjectId=${info.subjectId}&se=${se}&ep=${ep}&detailPath=${encodeURIComponent(info.id)}`;
+    const referer = `${moviebox}/movies/${id}`;
+    const query = `subjectId=${subjectId}&se=${se}&ep=${ep}&detailPath=${encodeURIComponent(id)}`;
 
     const parsed = playSchema.safeParse(await this.api(`/subject/play?${query}`, { referer }));
     if (!parsed.success || parsed.data.code !== 0) {
-      Logger.warn(`moviebox: play ${info.id} S${se}E${ep} returned an unexpected shape`);
+      Logger.warn(`moviebox: play ${id} S${se}E${ep} returned an unexpected shape`);
       return null;
     }
     const streams = parsed.data.data?.streams ?? [];
@@ -233,24 +294,75 @@ export class MovieBox {
         codec: s.codecName || undefined,
       }))
       .sort((a, b) => b.quality - a.quality);
+    const durations = streams.map((s) => s.duration ?? 0);
 
-    // Captions are keyed to a stream but shared across its resolutions.
     const first = streams[0];
+    const subtitles = withSubtitles ? await this.subtitles(target, first, referer) : [];
+    return { sources, subtitles, durations, first };
+  }
+
+  /** Captions are keyed to a stream but shared across its resolutions. */
+  private static async subtitles(
+    { id, subjectId }: { id: string; subjectId: string },
+    stream: { id: string; format: string },
+    referer = `${moviebox}/movies/${id}`,
+  ): Promise<MovieBoxSubtitle[]> {
     const captions = captionSchema.safeParse(
       await this.api(
-        `/subject/caption?format=${first.format}&id=${first.id}&subjectId=${info.subjectId}&detailPath=${encodeURIComponent(info.id)}`,
+        `/subject/caption?format=${stream.format}&id=${stream.id}&subjectId=${subjectId}&detailPath=${encodeURIComponent(id)}`,
         { referer },
       ),
     );
-    const subtitles =
-      captions.success && captions.data.code === 0
-        ? (captions.data.data?.captions ?? []).map((c) => ({
-            label: c.lanName,
-            langCode: c.lan,
-            url: proxifyFetch(c.url, CDN_HEADERS),
-          }))
-        : [];
+    if (!captions.success || captions.data.code !== 0) return [];
+    return (captions.data.data?.captions ?? []).map((c) => ({
+      label: c.lanName,
+      langCode: c.lan,
+      url: proxifyFetch(c.url, CDN_HEADERS),
+      format: "srt" as const,
+    }));
+  }
 
-    return { sources, subtitles, headers: CDN_HEADERS };
+  /**
+   * Stream sources for a movie (season/episode 0) or one TV episode, in the
+   * language version `dub` (default: the title itself). Every dub is its own
+   * subject upstream, so switching audio means playing a different subject.
+   *
+   * Dubs often carry fewer subtitles than the original (The Love Hypothesis's
+   * French dub has only French), so when a dub is the same cut as the original
+   * the original's extra languages are added, marked `fromOriginal`.
+   *
+   * The returned MP4 URLs are signed and short-lived; they are proxied so the
+   * CDN sees the moviebox Referer it insists on.
+   */
+  static async watch(
+    info: Pick<MovieBoxInfo, "id" | "subjectId" | "type" | "dubs">,
+    season = 0,
+    episode = 0,
+    dub?: MovieBoxDub | null,
+  ): Promise<MovieBoxStream | null> {
+    const se = info.type === "movie" ? 0 : season;
+    const ep = info.type === "movie" ? 0 : episode;
+    const target = dub ?? info;
+    const original = info.dubs.find((d) => d.original);
+    const borrowFrom = dub && original && original.subjectId !== dub.subjectId ? original : null;
+
+    const [own, orig] = await Promise.all([
+      this.play(target, se, ep),
+      borrowFrom ? this.play(borrowFrom, se, ep, false) : null,
+    ]);
+    if (!own) return null;
+
+    let subtitles = own.subtitles;
+    if (borrowFrom && orig && sameCut(own.durations, orig.durations)) {
+      subtitles = mergeSubtitles(subtitles, await this.subtitles(borrowFrom, orig.first));
+    }
+
+    return {
+      sources: own.sources,
+      subtitles,
+      headers: CDN_HEADERS,
+      audio: dub ?? undefined,
+      audioTracks: info.dubs,
+    };
   }
 }

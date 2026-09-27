@@ -5,6 +5,10 @@ import { z } from "zod";
 export const envelope = <T extends z.ZodTypeAny>(data: T) =>
   z.object({ code: z.number(), message: z.string().optional(), data: data.nullish() });
 
+// Payloads passed through untouched, in MovieBox's own shape (home, ranking,
+// raw detail, suggest) — only the envelope is checked.
+export const rawSchema = envelope(z.unknown());
+
 const imageSchema = z.object({ url: z.string() }).loose();
 
 // ─── Subject card (search, trending, filter, detail) ────────────────────────
@@ -31,6 +35,7 @@ export const subjectSchema = z
             lanName: z.string(),
             lanCode: z.string(),
             original: z.boolean().optional(),
+            type: z.number().optional(), // 0 = dubbed audio, 1 = burned-in subtitles
             detailPath: z.string(),
           })
           .loose(),
@@ -160,11 +165,23 @@ export type MovieBoxSeason = {
   resolutions: number[];
 };
 
+// One language version of a title. MovieBox files every dub as its own subject
+// (own id and subjectId); `hardsub` versions are the original audio with
+// subtitles burned into the picture.
+export type MovieBoxDub = {
+  id: string;
+  subjectId: string;
+  language: string;
+  langCode: string;
+  original: boolean;
+  kind: "audio" | "hardsub";
+};
+
 export type MovieBoxInfo = MovieBoxItem & {
   description?: string;
   duration?: number;
   subtitleLanguages: string[];
-  dubs: { id: string; subjectId: string; language: string; langCode: string; original: boolean }[];
+  dubs: MovieBoxDub[];
   cast: { name: string; character?: string; image?: string }[];
   seasons: MovieBoxSeason[];
 };
@@ -177,10 +194,21 @@ export type MovieBoxSource = {
   codec?: string;
 };
 
-export type MovieBoxSubtitle = { label: string; langCode: string; url: string };
+export type MovieBoxSubtitle = {
+  label: string;
+  langCode: string;
+  url: string;
+  format: "srt";
+  /** Taken from the original-audio version, which is the same cut as this dub. */
+  fromOriginal?: boolean;
+};
 
 export type MovieBoxStream = {
   sources: MovieBoxSource[];
   subtitles: MovieBoxSubtitle[];
   headers: Record<string, string>;
+  /** The language version these sources play, when the title has dubs. */
+  audio?: MovieBoxDub;
+  /** Every language version of the title; pass a langCode as ?audio= to switch. */
+  audioTracks: MovieBoxDub[];
 };

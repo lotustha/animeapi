@@ -22,6 +22,15 @@ const getInfo = async (id: string): Promise<MovieBoxInfo | null> => {
 
 const readType = (value: unknown) => (value === "movie" || value === "tv" ? value : "all");
 
+/** cache.get → fetch → cache.set for the raw passthrough routes. */
+const cachedRaw = async (key: string, ttl: number, load: () => Promise<unknown>) => {
+  const cached = await Cache.get(key);
+  if (cached) return JSON.parse(cached);
+  const data = await load();
+  if (data != null) Cache.set(key, JSON.stringify(data), ttl);
+  return data;
+};
+
 export const movieBoxRoutes = new Elysia({ prefix: "/moviebox" })
   .get("/", () => ({
     name: "moviebox",
@@ -32,8 +41,55 @@ export const movieBoxRoutes = new Elysia({ prefix: "/moviebox" })
       prefix + "/info/{id}",
       prefix + "/watch/{id}                      → movie",
       prefix + "/watch/{id}?season=1&episode=1   → tv episode",
+      prefix + "/watch/{id}?audio=hi              → a dub (langCode from info.dubs)",
+      prefix + "/home                             → raw home rows",
+      prefix + "/ranking/{id}?page=1&perPage=24   → raw ranking list",
+      prefix + "/detail/{subjectId}               → raw detail",
+      prefix + "/suggest/{query}?perPage=12       → raw search suggestions",
     ],
   }))
+
+  // ─── Raw MovieBox payloads ─────────────────────────────────────────────────
+  .get("/home", async ({ status }) => {
+    const data = await cachedRaw("moviebox:home", 1800, () => MovieBox.home());
+    return data ?? status(502, { message: "Home unavailable" });
+  })
+
+  .get(
+    "/ranking/:id",
+    async ({ params: { id }, query, status }) => {
+      const page = parseInt(query?.page as string) || 1;
+      const perPage = Math.min(parseInt(query?.perPage as string) || 24, 50);
+      const data = await cachedRaw(`moviebox:ranking:${id}:${page}:${perPage}`, 3600, () =>
+        MovieBox.ranking(id, page, perPage),
+      );
+      return data ?? status(404, { message: "Ranking list not found" });
+    },
+    { params: t.Object({ id: t.String() }) },
+  )
+
+  .get(
+    "/detail/:subjectId",
+    async ({ params: { subjectId }, status }) => {
+      const data = await cachedRaw(`moviebox:detail:${subjectId}`, INFO_TTL, () =>
+        MovieBox.detail(subjectId),
+      );
+      return data ?? status(404, { message: "Title not found" });
+    },
+    { params: t.Object({ subjectId: t.String() }) },
+  )
+
+  .get(
+    "/suggest/:query",
+    async ({ params: { query: term }, query }) => {
+      const perPage = Math.min(parseInt(query?.perPage as string) || 12, 30);
+      const data = await cachedRaw(`moviebox:suggest:${term}:${perPage}`, 43200, () =>
+        MovieBox.suggest(term, perPage),
+      );
+      return data ?? { items: [] };
+    },
+    { params: t.Object({ query: t.String() }) },
+  )
 
   // ─── Trending ──────────────────────────────────────────────────────────────
   .get("/trending", async ({ query }) => {
@@ -87,11 +143,20 @@ export const movieBoxRoutes = new Elysia({ prefix: "/moviebox" })
         return status(400, { message: "TV titles need ?season=N&episode=N" });
       }
 
-      const key = `moviebox:watch:${id}:${season}:${episode}`;
+      const audio = (query?.audio as string | undefined) || undefined;
+      const dub = MovieBox.pickDub(info, audio);
+      if (audio && !dub) {
+        return status(404, {
+          message: `No "${audio}" audio for this title`,
+          audioTracks: info.dubs,
+        });
+      }
+
+      const key = `moviebox:watch:${id}:${season}:${episode}:${dub?.subjectId ?? ""}`;
       const cached = await Cache.get(key);
       if (cached) return JSON.parse(cached);
 
-      const stream = await MovieBox.watch(info, season, episode);
+      const stream = await MovieBox.watch(info, season, episode, dub);
       if (!stream) return status(404, { message: "No sources for this title/episode" });
       Cache.set(key, JSON.stringify(stream), STREAM_TTL);
       return stream;

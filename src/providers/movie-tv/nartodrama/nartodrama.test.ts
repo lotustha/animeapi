@@ -12,6 +12,7 @@ import type { EdgeAnswer, WatchPageContext } from "./scraper/refresh-source.js";
 const edge = vi.hoisted(() => ({
   answer: null as unknown as EdgeAnswer,
   listed: null as { ok: true; play_url: string } | null,
+  live: null as { ok: true; play_url: string } | null,
 }));
 vi.mock("./scraper/refresh-source.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("./scraper/refresh-source.js")>();
@@ -28,6 +29,7 @@ vi.mock("./scraper/refresh-source.js", async (importOriginal) => {
     getWatchContextResult: vi.fn(async () => ({ ctx })),
     resolveSourceResult: vi.fn(async () => edge.answer),
     listedSource: vi.fn(async () => edge.listed),
+    livePageSource: vi.fn(async () => edge.live),
     prefersListing: () => false,
   };
 });
@@ -81,5 +83,17 @@ describe("watchResult fallback rungs", () => {
     edge.answer = { kind: "busy", reason: "rate-limited", retryAfterSec: 20 };
     expect(await NartoDrama.watchResult("wiring-busy", 6, "en-US")).toMatchObject({ kind: "busy" });
     expect(alternate).not.toHaveBeenCalled();
+  });
+});
+
+describe("watchResult live-page rung", () => {
+  it("serves the live page's own link before calling an episode gone", async () => {
+    edge.answer = { kind: "gone", reason: "dead-link" } as unknown as EdgeAnswer;
+    edge.listed = null;
+    edge.live = { ok: true, play_url: "https://cdn.example/owJREAfFhImiZNQqmhqR1EElLaUvDfICwV1qfG?a=0" };
+    const stream = await NartoDrama.watchResult("live-rung", 14, "en-US");
+    edge.live = null;
+    expect(stream).not.toHaveProperty("kind");
+    expect(alternate).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), 14, expect.anything());
   });
 });

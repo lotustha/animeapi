@@ -13,6 +13,7 @@ import {
   getWatchContextResult,
   isHlsSource,
   listedSource,
+  livePageSource,
   prefersListing,
   resolveSourceResult,
   servesDirect,
@@ -381,6 +382,16 @@ export class NartoDrama {
           servedBy = "listing";
           resolved = listed;
         } else {
+          // Gone by the listing and the edge — but both can be stale while the
+          // live page itself is fine. One fresh look at this episode's page
+          // before calling it gone. See livePageSource.
+          const live = answer.kind === "gone" ? await livePageSource(slug, episode, lang) : null;
+          if (live) {
+            Logger.warn(`nartodrama: ${slug} ep ${episode} served from the live page (edge: gone ${answer.reason})`);
+            inc("live_page_served");
+            servedBy = "live-page";
+            resolved = live;
+          } else {
           // Gone on narto — another site may still carry the same app's file.
           // Never for busy: that is "ask again", and narto may answer next time.
           const alternate =
@@ -392,6 +403,7 @@ export class NartoDrama {
           inc(`alt_served_${alternate.site}`);
           servedBy = alternate.site;
           resolved = { ok: true, play_url: alternate.url };
+          }
         }
       }
 

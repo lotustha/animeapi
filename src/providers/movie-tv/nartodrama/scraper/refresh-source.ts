@@ -374,6 +374,58 @@ async function fetchWatchPageAnswer(
   };
 }
 
+/**
+ * The video link a watch page publishes for ITS OWN episode, from the page's
+ * schema.org VideoObject (`"contentUrl"`), or null.
+ *
+ * WHY: the watch context is cached per SERIES for up to six hours, so its
+ * episode listing carries links signed when that one page was fetched. On
+ * 2026-09-27 "The Delivery Boy Is a Racing God" ep 14 answered a dead link
+ * from both the listing and a forced edge refresh (410) — while the live page
+ * for ep 14 published a freshly signed contentUrl that played. Only trusted
+ * when the same JSON-LD block names this exact episode as its page, so a
+ * page that redirected elsewhere cannot hand over another episode's file.
+ */
+export function pageContentUrl(html: string, slug: string, episode: number): string | null {
+  const unescape = (s: string) =>
+    s.replace(/\\u0026/gi, "&").replace(/\\\//g, "/").replace(/&amp;/g, "&");
+  const blocks = html.match(/<script[^>]*application\/ld\+json[^>]*>[\s\S]*?<\/script>/gi) ?? [html];
+  const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, (c) => `\\${c}`);
+  const page = new RegExp(`/watch/${escaped}/${episode}(?:[?"#/]|$)`);
+  for (const block of blocks) {
+    const text = unescape(block);
+    const own = text.match(/"mainEntityOfPage"\s*:\s*"([^"]+)"/);
+    if (!own || !page.test(own[1])) continue;
+    const url = text.match(/"contentUrl"\s*:\s*"(https?:\/\/[^"]+)"/)?.[1];
+    if (url) return url;
+  }
+  return null;
+}
+
+/**
+ * The last rung before "gone": fetch the LIVE watch page for this episode
+ * (never the cached context) and serve its own contentUrl, if the CDN plays
+ * it. One page request, and only on a path that would otherwise fail.
+ */
+export async function livePageSource(
+  slug: string,
+  episode: number,
+  lang: string = LANG,
+  probe: CdnProbe = probeCdn,
+): Promise<RefreshSource | null> {
+  const answer = await fetchWatchPageAnswer(slug, episode, lang);
+  if (!("ctx" in answer)) return null;
+  const url = pageContentUrl(answer.ctx.html ?? "", slug, episode);
+  if (!url) return null;
+  try {
+    const status = await probe(url);
+    if (status < 200 || status >= 300) return null;
+  } catch {
+    return null;
+  }
+  return { ok: true, play_url: url };
+}
+
 export async function fetchWatchPage(
   slug: string,
   episode: number,

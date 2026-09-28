@@ -532,12 +532,49 @@ function buildEdgeUrl(ctx: WatchPageContext, episode: number, force: boolean): s
   return ctx.edgeBase.replace(/\/+$/, "") + "/e/rs" + url.pathname + url.search;
 }
 
+/**
+ * Episodes narto has told to wait, by `slug#episode` → when the wait ends (ms).
+ *
+ * narto answers `refresh_source_cooldown_active` for ONE episode whose provider
+ * fetch failed, and every further ask restarts that wait — so an episode
+ * viewers keep retrying never gets out of it ("Love Is Near, Yet Unnoticed"
+ * ep 2, 2026-09-28: 503 for as long as anyone asked). Inside the wait the edge
+ * is not asked at all; the cooldown is answered from here. Only the edge call:
+ * the listing and alternate-site rungs still run, and they are what rescue an
+ * episode while narto cools down.
+ */
+const edgeCooldownUntil = new Map<string, number>();
+
+/** Test hook. */
+export function resetEdgeCooldowns() {
+  edgeCooldownUntil.clear();
+}
+
+/** Seconds left on [key]'s cooldown at [nowMs], or 0 when it may be asked. */
+export function edgeCooldownLeft(key: string, nowMs = Date.now()): number {
+  const until = edgeCooldownUntil.get(key) ?? 0;
+  if (until <= nowMs) {
+    if (until) edgeCooldownUntil.delete(key);
+    return 0;
+  }
+  return Math.max(1, Math.ceil((until - nowMs) / 1000));
+}
+
+/** Remember that narto told [key] to wait [seconds]. */
+export function noteEdgeCooldown(key: string, seconds: number, nowMs = Date.now()) {
+  edgeCooldownUntil.set(key, nowMs + seconds * 1000);
+}
+
 async function callRefreshSource(
   ctx: WatchPageContext,
   slug: string,
   episode: number,
   force: boolean,
 ): Promise<EdgeAnswer> {
+  const coolKey = `${slug}#${episode}`;
+  const left = edgeCooldownLeft(coolKey);
+  if (left > 0) return busy("upstream-cooldown", left);
+
   const res = await fetchWithRetry(buildEdgeUrl(ctx, episode, force), {
     headers: {
       "User-Agent": UA,
@@ -559,6 +596,9 @@ async function callRefreshSource(
   // Only a real rate limit quiets background work. One provider's episodes
   // cooling down on narto's side says nothing about this server's budget.
   if (answer.kind === "busy" && answer.reason === "rate-limited") nartoBudget.noteBusy();
+  if (answer.kind === "busy" && answer.reason === "upstream-cooldown") {
+    noteEdgeCooldown(coolKey, answer.retryAfterSec);
+  }
   return answer;
 }
 

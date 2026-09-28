@@ -43,6 +43,8 @@ export const movieBoxRoutes = new Elysia({ prefix: "/moviebox" })
       prefix + "/watch/{id}?season=1&episode=1   → tv episode",
       prefix + "/watch/{id}?audio=hi              → a dub (langCode from info.dubs)",
       prefix + "/home                             → raw home rows (Bollywood first)",
+      prefix + "/tab/{tabId}                      → raw rows of a site tab (2 movie, 9 midnight 18+)",
+      prefix + "/midnight                         → raw rows of the 18+ tab",
       prefix + "/filter?type=movie&country=India&sort=Latest&page=1 → raw browse filter",
       prefix + "/ranking/{id}?page=1&perPage=24   → raw ranking list",
       prefix + "/detail/{subjectId}               → raw detail",
@@ -54,6 +56,22 @@ export const movieBoxRoutes = new Elysia({ prefix: "/moviebox" })
   .get("/home", async ({ status }) => {
     const data = await cachedRaw("moviebox:home:v2", 1800, () => MovieBox.home());
     return data ?? status(502, { message: "Home unavailable" });
+  })
+
+  // Site tabs. The client decides whether to show the 18+ one (tab 9): it is
+  // opt-in behind an age gate in the app's settings.
+  .get("/tab/:tabId", async ({ params, status }) => {
+    const tabId = parseInt(params.tabId);
+    if (!Number.isInteger(tabId) || tabId < 1 || tabId > 999) {
+      return status(400, { message: "Invalid tabId" });
+    }
+    const data = await cachedRaw(`moviebox:tab:${tabId}`, 1800, () => MovieBox.tab(tabId));
+    return data ?? status(404, { message: "Tab unavailable" });
+  })
+
+  .get("/midnight", async ({ status }) => {
+    const data = await cachedRaw("moviebox:tab:9", 1800, () => MovieBox.tab(9));
+    return data ?? status(502, { message: "Tab unavailable" });
   })
 
   .get("/filter", async ({ query, status }) => {

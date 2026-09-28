@@ -155,6 +155,14 @@ export class MovieBox {
    * HOME_ROWS placed first after the banner. Added rows copy the shape of the
    * site's own subject rows, so clients render them like any other.
    */
+  /**
+   * A site tab's rows (`operatingList`), the page behind /web/<tab>. Tab 2 is
+   * Movie; tab 9 is the age-gated "midnight" (18+) tab.
+   */
+  static async tab(tabId: number) {
+    return this.raw(`/tab-operating?tabId=${tabId}&host=themoviebox.xyz`);
+  }
+
   static async home() {
     const [home, ...extra] = await Promise.all([
       this.raw("/home"),

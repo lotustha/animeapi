@@ -258,6 +258,27 @@ export class MovieBox {
     return { page, hasNextPage: parsed.data.data.pager.hasMore, results };
   }
 
+  /**
+   * What people are searching for right now (the site's "everyone is
+   * searching" list), each term with its top search result so clients can
+   * show a poster. Terms with no result are dropped.
+   */
+  static async topSearches() {
+    const raw = (await this.raw("/subject/everyone-search")) as
+      | { everyoneSearch?: { title?: string }[] }
+      | null;
+    const terms = (raw?.everyoneSearch ?? [])
+      .map((e) => (e?.title ?? "").trim())
+      .filter((t) => t.length > 0);
+    const found = await Promise.all(
+      terms.map(async (keyword) => {
+        const { results } = await this.search(keyword, 1, "all");
+        return results.length ? { keyword, item: results[0] } : null;
+      }),
+    );
+    return { items: found.filter((f) => f !== null) };
+  }
+
   static async trending(page = 1) {
     // The BFF's trending pages are 0-based.
     const parsed = trendingSchema.safeParse(

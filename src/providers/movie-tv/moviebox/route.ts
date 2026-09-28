@@ -45,6 +45,7 @@ export const movieBoxRoutes = new Elysia({ prefix: "/moviebox" })
       prefix + "/home                             → raw home rows (Bollywood first)",
       prefix + "/tab/{tabId}                      → raw rows of a site tab (2 movie, 9 midnight 18+)",
       prefix + "/midnight                         → raw rows of the 18+ tab",
+      prefix + "/top-searches                     → what people search now, each with its top result",
       prefix + "/filter?type=movie&country=India&sort=Latest&page=1 → raw browse filter",
       prefix + "/ranking/{id}?page=1&perPage=24   → raw ranking list",
       prefix + "/detail/{subjectId}               → raw detail",
@@ -67,6 +68,12 @@ export const movieBoxRoutes = new Elysia({ prefix: "/moviebox" })
     }
     const data = await cachedRaw(`moviebox:tab:${tabId}`, 1800, () => MovieBox.tab(tabId));
     return data ?? status(404, { message: "Tab unavailable" });
+  })
+
+  // Live search trends, refreshed every 30 minutes.
+  .get("/top-searches", async ({ status }) => {
+    const data = await cachedRaw("moviebox:top-searches", 1800, () => MovieBox.topSearches());
+    return data ?? status(502, { message: "Top searches unavailable" });
   })
 
   .get("/midnight", async ({ status }) => {

@@ -129,7 +129,7 @@ export class Anikoto {
 
   private static async scrapeCardPage(url: string): Promise<AnikotoPagedResult<AnikotoSearchItem>> {
     try {
-      const res = await fetch(url, { headers: this.headers() });
+      const res = await fetch(url, { headers: this.headers(), signal: AbortSignal.timeout(10000) });
       const html = await res.text();
       const $ = cheerio.load(html);
 
@@ -240,7 +240,7 @@ export class Anikoto {
   // no nav, no slider, and no genre links.
   static async genres(): Promise<string[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers() });
+      const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers(), signal: AbortSignal.timeout(10000) });
       const $ = cheerio.load(await res.text());
       const set = new Set<string>();
       $("a[href*='/genre/']").each((_, el) => {
@@ -262,7 +262,7 @@ export class Anikoto {
   // show type or genre list.
   static async spotlight(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers() });
+      const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers(), signal: AbortSignal.timeout(10000) });
       const $ = cheerio.load(await res.text());
       const results: any[] = [];
       $(".swiper-slide").each((_, el) => {
@@ -312,7 +312,7 @@ export class Anikoto {
   static async suggestions(query: string): Promise<any[]> {
     try {
       const url = `${this.baseUrl}/ajax/anime/search?keyword=${encodeURIComponent(query)}`;
-      const res = await fetch(url, { headers: this.ajaxHeaders() });
+      const res = await fetch(url, { headers: this.ajaxHeaders(), signal: AbortSignal.timeout(10000) });
       const data = await res.json();
       const html = data?.result?.html ?? data?.result ?? "";
       const $ = cheerio.load(typeof html === "string" ? html : "");
@@ -357,7 +357,7 @@ export class Anikoto {
       const ts = Math.floor(Date.parse(`${date}T00:00:00Z`) / 1000);
       if (!Number.isFinite(ts)) return [];
       const url = `${this.baseUrl}/ajax/schedule/date?tz=0&time=${ts}`;
-      const res = await fetch(url, { headers: this.ajaxHeaders() });
+      const res = await fetch(url, { headers: this.ajaxHeaders(), signal: AbortSignal.timeout(10000) });
       const data = await res.json();
       const html = typeof data?.result === "string" ? data.result : "";
       const $ = cheerio.load(html);
@@ -395,7 +395,7 @@ export class Anikoto {
     try {
       const slug = id.split("$")[0]!;
       if (isBlockedSlug(slug)) return null;
-      const res = await fetch(`${this.baseUrl}/watch/${slug}`, { headers: this.headers() });
+      const res = await fetch(`${this.baseUrl}/watch/${slug}`, { headers: this.headers(), signal: AbortSignal.timeout(10000) });
       const $ = cheerio.load(await res.text());
 
       const aniId = $("#watch-main").attr("data-id") || null;
@@ -518,6 +518,7 @@ export class Anikoto {
     const url = `${this.baseUrl}/ajax/episode/list/${aniId}?vrf=${encodeURIComponent(vrf)}`;
     const res = await fetch(url, {
       headers: this.ajaxHeaders(`${this.baseUrl}/watch/${slug}`),
+      signal: AbortSignal.timeout(10000),
     });
     const data = await res.json();
     const html = typeof data?.result === "string" ? data.result : "";
@@ -549,12 +550,24 @@ export class Anikoto {
   private static parseEpisodeId(
     episodeId: string,
   ): { slug: string; ep: number; aniId: string } | null {
-    const slug = episodeId.split("$")[0] || "";
-    const ep = this.toInt(episodeId.match(/\$ep=([^$]+)/)?.[1]);
-    const aniId = episodeId.match(/\$id=([^$]+)/)?.[1] || "";
-    if (!slug || !aniId || !ep) return null;
-    if (isBlockedSlug(slug)) return null;
-    return { slug, ep, aniId };
+    // Composite ID format from /info/:id episodes
+    const epMatch = episodeId.match(/\$ep=([^$]+)/);
+    const idMatch = episodeId.match(/\$id=([^$]+)/);
+    if (epMatch && idMatch) {
+      const slug = episodeId.split("$")[0] || "";
+      const ep = this.toInt(epMatch[1]);
+      const aniId = idMatch[1];
+      if (!slug || !aniId || !ep) return null;
+      if (isBlockedSlug(slug)) return null;
+      return { slug, ep, aniId };
+    }
+
+    // Bare slug from /recent-episodes — treat as episode 1 and fetch aniId from info
+    const slug = episodeId;
+    if (!slug || isBlockedSlug(slug)) return null;
+    // We'll resolve aniId in the caller; for now return ep=1 with empty aniId
+    // The caller (streams/fetchEpisodeServers) must handle this case by fetching info first
+    return { slug, ep: 1, aniId: "" };
   }
 
   /** Re-fetch the episode list (fresh vrf) and return the episode's data-ids token. */
@@ -568,6 +581,7 @@ export class Anikoto {
       const url = `${this.baseUrl}/ajax/episode/list/${aniId}?vrf=${encodeURIComponent(vrf)}`;
       const res = await fetch(url, {
         headers: this.ajaxHeaders(`${this.baseUrl}/watch/${slug}`),
+        signal: AbortSignal.timeout(10000),
       });
       const data = await res.json();
       const $ = cheerio.load(typeof data?.result === "string" ? data.result : "");
@@ -586,7 +600,7 @@ export class Anikoto {
     referer: string,
   ): Promise<{ type: string; name: string; linkId: string }[]> {
     const url = `${this.baseUrl}/ajax/server/list?servers=${encodeURIComponent(serversToken)}`;
-    const res = await fetch(url, { headers: this.ajaxHeaders(referer) });
+    const res = await fetch(url, { headers: this.ajaxHeaders(referer), signal: AbortSignal.timeout(10000) });
     const data = await res.json();
     const $ = cheerio.load(typeof data?.result === "string" ? data.result : "");
     const servers: { type: string; name: string; linkId: string }[] = [];
@@ -643,6 +657,7 @@ export class Anikoto {
     try {
       const res = await fetch(`${this.baseUrl}/ajax/server?get=${encodeURIComponent(linkId)}`, {
         headers: this.ajaxHeaders(referer),
+        signal: AbortSignal.timeout(10000),
       });
       const data = await res.json();
       const url = data?.result?.url;
@@ -679,6 +694,7 @@ export class Anikoto {
     try {
       const res = await fetch(playerUrl, {
         headers: { "User-Agent": USER_AGENT, Referer: `${this.baseUrl}/` },
+        signal: AbortSignal.timeout(10000),
       });
       return res.ok;
     } catch {
@@ -695,6 +711,80 @@ export class Anikoto {
     return playerUrl;
   }
 
+  /**
+   * Decrypt megaplay.buzz `enc` blob locally using AES-256-CBC.
+   * Key/IV/padding extracted from e1-player.min.js (v1.8.112) on 2026-10-08.
+   * Replaces the broken enc-dec.app third-party service.
+   */
+  private static readonly MEGAPLAY_KEY = "i?LMTAx0Q6,:}50U";
+  private static readonly MEGAPLAY_IV = "W0;27ToaUpl_P%'c";
+
+  private static padKey(str: string, len: number): Uint8Array {
+    const encoded = new TextEncoder().encode(String(str));
+    const result = new Uint8Array(len);
+    result.set(encoded.subarray(0, Math.min(len, encoded.length)));
+    return result;
+  }
+
+  private static base64UrlDecode(input: string): Uint8Array {
+    let b64 = String(input).replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64.length % 4;
+    if (pad) b64 += "====".slice(pad);
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  private static async decryptMegaplayEnc(enc: string): Promise<{ file: string }[] | null> {
+    try {
+      // Try local AES-256-CBC decryption first (extracted from megaplay player)
+      const keyBytes = this.padKey(this.MEGAPLAY_KEY, 32);
+      const ivBytes = this.padKey(this.MEGAPLAY_IV, 16);
+      const encBytes = this.base64UrlDecode(enc);
+
+      // Use Web Crypto API (available in Bun and modern Node)
+      const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        keyBytes,
+        { name: "AES-CBC" },
+        false,
+        ["decrypt"],
+      );
+      const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-CBC", iv: ivBytes },
+        cryptoKey,
+        encBytes,
+      );
+      const json = new TextDecoder().decode(decrypted);
+      const parsed = JSON.parse(json);
+
+      // Handle both { file: "..." } and { sources: [{ file: "..." }] } shapes
+      if (typeof parsed?.file === "string") return [{ file: parsed.file }];
+      if (Array.isArray(parsed?.sources)) {
+        return parsed.sources.filter((s: any) => typeof s?.file === "string");
+      }
+      return null;
+    } catch (err) {
+      Logger.error(`Anikoto local AES decrypt failed: ${String(err)}`);
+      // Fall back to enc-dec.app if local decryption fails (e.g. key rotation)
+      try {
+        const res = await fetch("https://enc-dec.app/api/dec-mega", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: enc, agent: USER_AGENT }),
+          signal: AbortSignal.timeout(10000),
+        });
+        const data = (await res.json()) as { result?: any };
+        const sources = data?.result?.sources;
+        if (!Array.isArray(sources)) return null;
+        return sources.filter((s: any) => typeof s?.file === "string");
+      } catch {
+        return null;
+      }
+    }
+  }
+
   private static async resolvePlayer(playerUrl: string): Promise<{
     m3u8: string;
     referer: string;
@@ -709,6 +799,7 @@ export class Anikoto {
       const origin = new URL(playerUrl).origin;
       const pageRes = await fetch(playerUrl, {
         headers: { "User-Agent": USER_AGENT, Referer: `${this.baseUrl}/` },
+        signal: AbortSignal.timeout(10000),
       });
       if (!pageRes.ok) return null;
       const pageHtml = await pageRes.text();
@@ -723,14 +814,65 @@ export class Anikoto {
           Referer: playerUrl,
           "X-Requested-With": "XMLHttpRequest",
         },
+        signal: AbortSignal.timeout(10000),
       });
       if (!srcRes.ok) return null;
       const data = (await srcRes.json()) as any;
 
-      // enc-dec.app is currently broken for megaplay payloads ("URI malformed"),
-      // so skip HLS resolution entirely and let the caller serve the iframe URL
-      // directly — players can embed it as-is.
-      return null;
+      // Plaintext `sources` (older payloads) is still honoured; otherwise try
+      // to decrypt the `enc` blob locally via AES-256-CBC. When decryption fails we
+      // still extract tracks/intro/outro from the plaintext fields and return
+      // null for m3u8 so the caller can serve the iframe directly.
+      const plain = Array.isArray(data?.sources)
+        ? data.sources
+        : data?.sources?.file
+          ? [{ file: data.sources.file }]
+          : null;
+      const files =
+        plain ?? (typeof data?.enc === "string" ? await this.decryptMegaplayEnc(data.enc) : null);
+
+      const tracks = Array.isArray(data?.tracks) ? data.tracks : [];
+      const subtitles = tracks
+        .filter((t: any) => t?.kind !== "thumbnails" && typeof t?.file === "string")
+        .map((t: any) => ({
+          url: t.file as string,
+          lang: typeof t.label === "string" ? t.label : undefined,
+          type: "captions",
+        }));
+
+      const intro =
+        data?.intro && typeof data.intro.start === "number"
+          ? ([this.toInt(data.intro.start), this.toInt(data.intro.end)] as [number, number])
+          : undefined;
+      const outro =
+        data?.outro && typeof data.outro.start === "number"
+          ? ([this.toInt(data.outro.start), this.toInt(data.outro.end)] as [number, number])
+          : undefined;
+
+      const m3u8File = files?.find((f) => f.file.includes(".m3u8"))?.file;
+      if (!m3u8File) {
+        // No decrypted m3u8 available, but preserve metadata for the caller.
+        // Return null so streams() falls back to iframe embedding while still
+        // having access to subtitles/intro/outro via the getSources payload.
+        if (subtitles.length > 0 || intro || outro) {
+          return {
+            m3u8: "",
+            referer: `${origin}/`,
+            subtitles,
+            intro,
+            outro,
+          };
+        }
+        return null;
+      }
+
+      return {
+        m3u8: m3u8File,
+        referer: `${origin}/`,
+        subtitles,
+        intro,
+        outro,
+      };
     } catch (err) {
       Logger.error(`Anikoto resolvePlayer error for ${playerUrl}: ${String(err)}`);
       return null;
@@ -744,10 +886,18 @@ export class Anikoto {
     subOrDub: "softsub" | "dub" | "hardsub" = "hardsub",
   ): Promise<AnikotoServer[]> {
     try {
-      const parsed = this.parseEpisodeId(episodeId);
+      let parsed = this.parseEpisodeId(episodeId);
       if (!parsed) return [];
-      const referer = `${this.baseUrl}/watch/${parsed.slug}/ep-${parsed.ep}`;
 
+      // Bare slug from /recent-episodes has no aniId — resolve it via /info
+      // so getEpisodeServersToken can build the correct composite ID.
+      if (!parsed.aniId) {
+        const info = await this.info(parsed.slug);
+        if (!info?.aniId) return [];
+        parsed = { ...parsed, aniId: info.aniId };
+      }
+
+      const referer = `${this.baseUrl}/watch/${parsed.slug}/ep-${parsed.ep}`;
       const token = await this.getEpisodeServersToken(parsed.slug, parsed.aniId, parsed.ep);
       if (!token) return [];
 
@@ -780,8 +930,17 @@ export class Anikoto {
 
   static async streams(episodeId: string, type?: "softsub" | "dub" | "hardsub"): Promise<any> {
     try {
-      const parsed = this.parseEpisodeId(episodeId);
+      let parsed = this.parseEpisodeId(episodeId);
       if (!parsed) return { isDub: false, results: [] };
+
+      // Bare slug from /recent-episodes has no aniId — resolve it via /info
+      // so getEpisodeServersToken can build the correct composite ID.
+      if (!parsed.aniId) {
+        const info = await this.info(parsed.slug);
+        if (!info?.aniId) return { isDub: false, results: [] };
+        parsed = { ...parsed, aniId: info.aniId };
+      }
+
       const requested = type ?? "softsub";
       const isDub = requested === "dub";
       const referer = `${this.baseUrl}/watch/${parsed.slug}/ep-${parsed.ep}`;
@@ -815,7 +974,7 @@ export class Anikoto {
               if (resolved) playerUrl = mirror;
             }
           }
-          if (resolved) {
+          if (resolved && resolved.m3u8) {
             results.push({
               name,
               iframe: playerUrl,
@@ -834,14 +993,27 @@ export class Anikoto {
             if (!globalIntro && resolved.intro) globalIntro = resolved.intro;
             if (!globalOutro && resolved.outro) globalOutro = resolved.outro;
           } else {
+            // Decryption failed or no m3u8 available. Before serving the
+            // iframe, verify the player host is actually up — vidwish.live
+            // goes down for days at a time while megaplay.buzz stays alive.
+            // /servers already does this via liveEmbedUrl(); /watch must too.
+            const liveIframe = await this.liveEmbedUrl(playerUrl);
             results.push({
               name,
-              iframe: playerUrl,
-              sources: [{ file: playerUrl, type: "iframe" }],
-              subtitles: [],
+              iframe: liveIframe,
+              sources: [{ file: liveIframe, type: "iframe" }],
+              subtitles: resolved?.subtitles?.length
+                ? resolved.subtitles.map((tr) => ({
+                    url: proxifyFetch(tr.url!, { Referer: resolved.referer! }),
+                    lang: tr.lang,
+                    type: isDub ? "none" : "soft",
+                  }))
+                : [],
               download: null,
               headers: this.embedHeaders(),
             });
+            if (!globalIntro && resolved?.intro) globalIntro = resolved.intro;
+            if (!globalOutro && resolved?.outro) globalOutro = resolved.outro;
           }
         } else {
           results.push({

@@ -65,7 +65,7 @@ export const anikotoRoutes = new Elysia({ prefix: "/anikoto" })
 
     const results = await Anikoto.recentlyUpdated(page);
     if (results && results.results && results.results.length > 0) {
-      Cache.set(key, JSON.stringify(results), 60); // 1 minute
+      Cache.set(key, JSON.stringify(results), 300); // 5 minutes — balances freshness vs upstream latency
     }
     return results;
   })
@@ -79,7 +79,7 @@ export const anikotoRoutes = new Elysia({ prefix: "/anikoto" })
 
     const results = await Anikoto.recentlyAdded(page);
     if (results && results.results && results.results.length > 0) {
-      Cache.set(key, JSON.stringify(results), 60);
+      Cache.set(key, JSON.stringify(results), 300); // 5 minutes
     }
     return results;
   })

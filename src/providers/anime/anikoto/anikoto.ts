@@ -265,27 +265,39 @@ export class Anikoto {
       const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers() });
       const $ = cheerio.load(await res.text());
       const results: any[] = [];
-      $(".swiper-slide.item").each((_, el) => {
+      $(".swiper-slide").each((_, el) => {
         const card = $(el);
-        const titleEl = card.find(".info .title.d-title, h2.title.d-title").first();
-        const href = card.find(".actions a.play, .actions a").first().attr("href") || "";
+        const titleEl = card.find("h2.ak-title.d-title, .info .title.d-title, h2.title.d-title").first();
+        const href =
+          card.find(".ak-btns a.btn, .actions a.play, .actions a").first().attr("href") || "";
         const slug = this.parseSlug(href);
         if (!slug) return;
         if (isBlocked(slug, titleEl.text(), titleEl.attr("data-jp"))) return;
-        const bg = card.find(".image div[style]").attr("style") || "";
+        const banner =
+          card.find(".cover img").attr("src") ||
+          card.find(".image div[style]").attr("style")?.match(/url\(['"]?(.+?)['"]?\)/)?.[1] ||
+          null;
+        const type = card.find(".ak-detail .it i.fa-play-circle").parent().text().trim() || "";
+        const releaseDate =
+          card.find(".ak-detail .it i.fa-calendar").parent().text().trim() ||
+          card.find(".meta.icons i.date").text().trim() ||
+          "";
+        const rating = card.find(".ak-detail .it i.fa-star").parent().text().trim() || "";
         results.push({
           id: slug,
           title: titleEl.text().trim(),
           japaneseTitle: titleEl.attr("data-jp")?.trim() || null,
-          banner: bg.match(/url\(['"]?(.+?)['"]?\)/)?.[1] || null,
+          banner,
           url: `${this.baseUrl}/watch/${slug}`,
-          type: "",
+          type,
           genres: [],
-          releaseDate: card.find(".meta.icons i.date").text().trim() || "",
+          releaseDate,
           quality: card.find(".meta.icons i.quality").text().trim() || "",
-          sub: card.find(".meta.icons i.sub").length > 0 ? 1 : 0,
+          rating,
+          sub: card.find(".meta.icons i.sub, .ak-sub").length > 0 ? 1 : 0,
           dub: card.find(".meta.icons i.dub").length > 0 ? 1 : 0,
-          description: card.find(".synopsis").text().trim(),
+          description:
+            card.find(".ak-desc, .synopsis").text().trim(),
         });
       });
       return results;

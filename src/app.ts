@@ -9,6 +9,7 @@ import { mangaRoutes } from "./providers/manga/route.js";
 import { movieTvRoutes } from "./providers/movie-tv/route.js";
 import { musicRoutes } from "./providers/music/route.js";
 import { streamRoutes } from "./providers/stream/route.js";
+import { shortsRoutes } from "./providers/shorts/route.js";
 import { cronRoutes } from "./routes/cron.js";
 import { adminRoutes } from "./routes/admin.js";
 import { healthRoutes } from "./core/health.js";
@@ -65,6 +66,7 @@ export async function createApp() {
           { name: "manga", description: "📚 Manga Providers (e.g., Mangaball, Atsu)" },
           { name: "movie", description: "🍿 Movie & TV Providers" },
           { name: "stream", description: "⚡ Direct Stream Providers" },
+          { name: "shorts", description: "🎞️ Short Video Providers" },
           { name: "proxy", description: "🥷 Utilities" },
         ],
       },
@@ -101,6 +103,7 @@ export async function createApp() {
     .use(mangaRoutes)
     .use(musicRoutes)
     .use(streamRoutes)
+    .use(shortsRoutes)
     .use(proxyRoutes)
     .use(cronRoutes)
     .use(adminRoutes)

@@ -714,23 +714,11 @@ export class Anikoto {
       });
       if (!srcRes.ok) return null;
       const data = (await srcRes.json()) as any;
-      const file: string | undefined = data?.sources?.file;
-      if (!file) return null;
 
-      const subtitles = (Array.isArray(data.tracks) ? data.tracks : [])
-        .filter((tr: any) => tr?.kind !== "thumbnails" && typeof tr?.file === "string")
-        .map((tr: any) => ({ url: tr.file, lang: tr.label ?? tr.kind, type: "soft" }));
-
-      const intro: [number, number] | undefined =
-        data?.intro && typeof data.intro.start === "number"
-          ? [this.toInt(data.intro.start), this.toInt(data.intro.end)]
-          : undefined;
-      const outro: [number, number] | undefined =
-        data?.outro && typeof data.outro.start === "number"
-          ? [this.toInt(data.outro.start), this.toInt(data.outro.end)]
-          : undefined;
-
-      return { m3u8: file, referer: `${origin}/`, subtitles, intro, outro };
+      // enc-dec.app is currently broken for megaplay payloads ("URI malformed"),
+      // so skip HLS resolution entirely and let the caller serve the iframe URL
+      // directly — players can embed it as-is.
+      return null;
     } catch (err) {
       Logger.error(`Anikoto resolvePlayer error for ${playerUrl}: ${String(err)}`);
       return null;

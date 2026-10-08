@@ -44,3 +44,7 @@ export const nartodrama_edge = "https://edge.narto-drama.com";
 export const moviebox = "https://themoviebox.xyz";
 export const moviebox_api = "https://h5-api.aoneroom.com/wefeed-h5api-bff";
 export const tidal = "https://api.tidal.com/v1";
+// Moj (ShareChat) short video. The API takes a guest account that the web
+// client creates with POST /signUp; videos on cdn-moj-g need no auth.
+export const moj = "https://mojapp.in";
+export const moj_api = "https://moj-apis.sharechat.com";

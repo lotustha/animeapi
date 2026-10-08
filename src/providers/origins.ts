@@ -5,7 +5,17 @@ export const anigo = "https://anigo.to";
 export const hianime = "https://hianime.at";
 export const anizen = "https://anizen.tr";
 export const anizen_api = "https://cdn.anizen.tr";
-export const anikoto = "https://anikoto.cz";
+// Primary + mirrors for anikoto. The VPS IP gets blocked intermittently on
+// individual domains; rotating across all five keeps streams alive. Order:
+// primary TV domain first, then regional/short/network mirrors.
+export const anikoto = "https://anikototv.to";
+export const ANIKOTO_MIRRORS = [
+  "https://anikototv.to",
+  "https://anikoto.cz",
+  "https://anikoto.me",
+  "https://anikoto.net",
+  "https://anikototv.se",
+] as const;
 // toonstream.vip 302s here; the site was rebuilt off WordPress onto a custom
 // app in 2026 (new URL scheme, /embed/<hash> player indirection).
 export const toonstream = "https://toon-stream.site";

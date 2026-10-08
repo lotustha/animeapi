@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
 import { Logger } from "../../../core/logger.js";
-import { anikoto as anikotoOrigin } from "../../origins.js";
+import { anikoto as anikotoOrigin, ANIKOTO_MIRRORS } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
 import { MegaUp } from "../animekai/scraper/megaup.js";
 import { proxifyFetch } from "../../../core/proxy.js";
@@ -26,6 +26,36 @@ import type {
 // to inject (no server-side proxying).
 export class Anikoto {
   private static baseUrl = anikotoOrigin;
+
+  // Mirror failover: tries each domain in ANIKOTO_MIRRORS until one returns a
+  // successful response. The VPS IP gets blocked intermittently on individual
+  // domains; rotating across all five keeps streams alive. Falls back to the
+  // primary baseUrl if all mirrors fail.
+  private static async fetchWithMirrorFailover(
+    path: string,
+    init?: RequestInit,
+  ): Promise<Response> {
+    const timeout = (init?.signal as AbortSignal)?.timeout ?? 10000;
+    for (const origin of ANIKOTO_MIRRORS) {
+      try {
+        const url = `${origin}${path}`;
+        const res = await fetch(url, {
+          ...init,
+          signal: AbortSignal.timeout(timeout),
+        });
+        if (res.ok) {
+          // Update baseUrl to the working mirror for subsequent requests in
+          // this call chain (headers/referer use this.baseUrl).
+          this.baseUrl = origin;
+          return res;
+        }
+      } catch {
+        // Network error or timeout — try next mirror.
+      }
+    }
+    // All mirrors failed — fall back to primary with original signal.
+    return fetch(`${anikotoOrigin}${path}`, init);
+  }
 
   private static headers(): Record<string, string> {
     return {
@@ -129,7 +159,16 @@ export class Anikoto {
 
   private static async scrapeCardPage(url: string): Promise<AnikotoPagedResult<AnikotoSearchItem>> {
     try {
-      const res = await fetch(url, { headers: this.headers(), signal: AbortSignal.timeout(10000) });
+      // Extract path from full URL for mirror failover; fall back to direct fetch
+      // if URL doesn't match any known origin (shouldn't happen for scrapeCardPage).
+      let res: Response | undefined;
+      try {
+        const u = new URL(url);
+        const path = u.pathname + u.search;
+        res = await this.fetchWithMirrorFailover(path, { headers: this.headers() });
+      } catch {
+        res = await fetch(url, { headers: this.headers(), signal: AbortSignal.timeout(10000) });
+      }
       const html = await res.text();
       const $ = cheerio.load(html);
 
@@ -240,7 +279,7 @@ export class Anikoto {
   // no nav, no slider, and no genre links.
   static async genres(): Promise<string[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers(), signal: AbortSignal.timeout(10000) });
+      const res = await this.fetchWithMirrorFailover("/home", { headers: this.headers() });
       const $ = cheerio.load(await res.text());
       const set = new Set<string>();
       $("a[href*='/genre/']").each((_, el) => {
@@ -262,7 +301,7 @@ export class Anikoto {
   // show type or genre list.
   static async spotlight(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers(), signal: AbortSignal.timeout(10000) });
+      const res = await this.fetchWithMirrorFailover("/home", { headers: this.headers() });
       const $ = cheerio.load(await res.text());
       const results: any[] = [];
       $(".swiper-slide").each((_, el) => {
@@ -311,8 +350,8 @@ export class Anikoto {
 
   static async suggestions(query: string): Promise<any[]> {
     try {
-      const url = `${this.baseUrl}/ajax/anime/search?keyword=${encodeURIComponent(query)}`;
-      const res = await fetch(url, { headers: this.ajaxHeaders(), signal: AbortSignal.timeout(10000) });
+      const path = `/ajax/anime/search?keyword=${encodeURIComponent(query)}`;
+      const res = await this.fetchWithMirrorFailover(path, { headers: this.ajaxHeaders() });
       const data = await res.json();
       const html = data?.result?.html ?? data?.result ?? "";
       const $ = cheerio.load(typeof html === "string" ? html : "");
@@ -356,8 +395,8 @@ export class Anikoto {
       // a `date=` param is silently ignored and always yields today's airings.
       const ts = Math.floor(Date.parse(`${date}T00:00:00Z`) / 1000);
       if (!Number.isFinite(ts)) return [];
-      const url = `${this.baseUrl}/ajax/schedule/date?tz=0&time=${ts}`;
-      const res = await fetch(url, { headers: this.ajaxHeaders(), signal: AbortSignal.timeout(10000) });
+      const path = `/ajax/schedule/date?tz=0&time=${ts}`;
+      const res = await this.fetchWithMirrorFailover(path, { headers: this.ajaxHeaders() });
       const data = await res.json();
       const html = typeof data?.result === "string" ? data.result : "";
       const $ = cheerio.load(html);
@@ -395,7 +434,7 @@ export class Anikoto {
     try {
       const slug = id.split("$")[0]!;
       if (isBlockedSlug(slug)) return null;
-      const res = await fetch(`${this.baseUrl}/watch/${slug}`, { headers: this.headers(), signal: AbortSignal.timeout(10000) });
+      const res = await this.fetchWithMirrorFailover(`/watch/${slug}`, { headers: this.headers() });
       const $ = cheerio.load(await res.text());
 
       const aniId = $("#watch-main").attr("data-id") || null;
@@ -515,10 +554,9 @@ export class Anikoto {
     slug: string,
   ): Promise<{ episodes: AnikotoEpisode[]; malId?: string }> {
     const vrf = await MegaUp.generateToken(aniId);
-    const url = `${this.baseUrl}/ajax/episode/list/${aniId}?vrf=${encodeURIComponent(vrf)}`;
-    const res = await fetch(url, {
+    const path = `/ajax/episode/list/${aniId}?vrf=${encodeURIComponent(vrf)}`;
+    const res = await this.fetchWithMirrorFailover(path, {
       headers: this.ajaxHeaders(`${this.baseUrl}/watch/${slug}`),
-      signal: AbortSignal.timeout(10000),
     });
     const data = await res.json();
     const html = typeof data?.result === "string" ? data.result : "";
@@ -578,10 +616,9 @@ export class Anikoto {
   ): Promise<string | null> {
     try {
       const vrf = await MegaUp.generateToken(aniId);
-      const url = `${this.baseUrl}/ajax/episode/list/${aniId}?vrf=${encodeURIComponent(vrf)}`;
-      const res = await fetch(url, {
+      const path = `/ajax/episode/list/${aniId}?vrf=${encodeURIComponent(vrf)}`;
+      const res = await this.fetchWithMirrorFailover(path, {
         headers: this.ajaxHeaders(`${this.baseUrl}/watch/${slug}`),
-        signal: AbortSignal.timeout(10000),
       });
       const data = await res.json();
       const $ = cheerio.load(typeof data?.result === "string" ? data.result : "");
@@ -599,8 +636,8 @@ export class Anikoto {
     serversToken: string,
     referer: string,
   ): Promise<{ type: string; name: string; linkId: string }[]> {
-    const url = `${this.baseUrl}/ajax/server/list?servers=${encodeURIComponent(serversToken)}`;
-    const res = await fetch(url, { headers: this.ajaxHeaders(referer), signal: AbortSignal.timeout(10000) });
+    const path = `/ajax/server/list?servers=${encodeURIComponent(serversToken)}`;
+    const res = await this.fetchWithMirrorFailover(path, { headers: this.ajaxHeaders(referer) });
     const data = await res.json();
     const $ = cheerio.load(typeof data?.result === "string" ? data.result : "");
     const servers: { type: string; name: string; linkId: string }[] = [];
@@ -655,7 +692,7 @@ export class Anikoto {
     referer: string,
   ): Promise<{ url: string; intro: [number, number]; outro: [number, number] } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/ajax/server?get=${encodeURIComponent(linkId)}`, {
+      const res = await this.fetchWithMirrorFailover(`/ajax/server?get=${encodeURIComponent(linkId)}`, {
         headers: this.ajaxHeaders(referer),
         signal: AbortSignal.timeout(10000),
       });
@@ -692,6 +729,7 @@ export class Anikoto {
 
   private static async playerPageAlive(playerUrl: string): Promise<boolean> {
     try {
+      // Player pages are on megaplay/vidwish, not anikoto mirrors — use direct fetch.
       const res = await fetch(playerUrl, {
         headers: { "User-Agent": USER_AGENT, Referer: `${this.baseUrl}/` },
         signal: AbortSignal.timeout(10000),

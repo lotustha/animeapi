@@ -114,24 +114,37 @@ export class MovieBox {
     retry = true,
   ): Promise<unknown> {
     const token = await getToken();
-    const res = await fetch(`${moviebox_api}${path}`, {
-      method: init.method ?? "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "X-Client-Info": JSON.stringify({ timezone: "UTC" }),
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "User-Agent": UA,
-        ...(init.referer ? { Referer: init.referer } : {}),
-      },
-      body: init.body ? JSON.stringify(init.body) : undefined,
-    });
-    const json = (await res.json().catch(() => null)) as { code?: number } | null;
-    if (retry && (res.status === 401 || json?.code === 401 || json?.code === 400)) {
-      session = null;
-      return this.api(path, init, false);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const res = await fetch(`${moviebox_api}${path}`, {
+        method: init.method ?? "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "X-Client-Info": JSON.stringify({ timezone: "UTC" }),
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "User-Agent": UA,
+          ...(init.referer ? { Referer: init.referer } : {}),
+        },
+        body: init.body ? JSON.stringify(init.body) : undefined,
+        signal: controller.signal,
+      });
+      const json = (await res.json().catch(() => null)) as { code?: number } | null;
+      if (retry && (res.status === 401 || json?.code === 401 || json?.code === 400)) {
+        session = null;
+        return this.api(path, init, false);
+      }
+      return json;
+    } catch (err) {
+      if ((err as Error).name === "AbortError") {
+        Logger.warn(`moviebox: ${path} timed out after 10s`);
+        return null;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
     }
-    return json;
   }
 
   /** `data` of a BFF call in MovieBox's own shape, or null on failure. */

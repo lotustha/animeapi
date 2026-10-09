@@ -618,6 +618,38 @@ export class AnimeKai {
     const cached = this.playersCache.get(pageUrl);
     if (cached && Date.now() - cached.at < this.PLAYERS_TTL_MS) return cached.players;
 
+    // Fast path: animekai.be serves a JSON /sources endpoint that returns all
+    // servers in one lightweight request (~400 bytes vs ~270 KB HTML). Fall back
+    // to HTML scraping if the endpoint is missing or errors.
+    try {
+      const sourcesPath = `/watch/${animeSlug}/ep/${epNum}/sources`;
+      const res = await this.fetchWithMirrorFailover(sourcesPath, {
+        headers: { ...this.headers(), "X-Requested-With": "XMLHttpRequest" },
+      });
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        const players: { name: string; url: string; lang: string }[] = [];
+        for (const lang of ["sub", "dub", "hsub"] as const) {
+          const list = data?.sources?.[lang];
+          if (!Array.isArray(list)) continue;
+          for (const s of list) {
+            if (!s?.source_url) continue;
+            players.push({
+              name: s.server_name || "Server",
+              url: s.source_url,
+              lang,
+            });
+          }
+        }
+        if (players.length > 0) {
+          this.playersCache.set(pageUrl, { at: Date.now(), players });
+          return players;
+        }
+      }
+    } catch {
+      // JSON endpoint unavailable — fall through to HTML scraping.
+    }
+
     const html = await this.fetchWatchHtml(pageUrl, `${this.baseUrl}/watch/${animeSlug}`);
     if (!html) return [];
     const $ = cheerio.load(html);

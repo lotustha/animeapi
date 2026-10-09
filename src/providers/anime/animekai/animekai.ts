@@ -457,11 +457,14 @@ export class AnimeKai {
       info.recommendations = [];
       $("section.sidebar-section:not(#related-anime) .aitem-col .aitem").each((_, ele) => {
         const aTag = $(ele);
-        const recId = aTag.attr("href")?.replace("/watch/", "");
+        const rawHref = aTag.attr("href") ?? "";
+        // animekai.be sometimes returns absolute hrefs; avoid double-prefixing.
+        const recUrl = rawHref.startsWith("http") ? rawHref : `${this.baseUrl}${rawHref}`;
+        const recId = rawHref.replace(/^https?:\/\/[^/]+/, "").replace("/watch/", "");
         info.recommendations!.push({
           id: recId,
           title: aTag.find(".title").text().trim(),
-          url: `${this.baseUrl}${aTag.attr("href")}`,
+          url: recUrl,
           image:
             aTag.attr("style")?.match(/background-image:\s*url\('(.+?)'\)/)?.[1] ??
             aTag.find("img").attr("src"),
@@ -737,12 +740,18 @@ export class AnimeKai {
 
   static async fetchEpisodeServers(
     episodeId: string,
-    subOrDub: "softsub" | "dub" | "hardsub" = "hardsub",
+    subOrDub?: "softsub" | "dub" | "hardsub",
   ): Promise<AnimeKaiServer[]> {
     try {
+      // animekai.be serves "sub" and "dub" but not "hsub"/"hardsub". Default to
+      // softsub and fall back to all available languages when no match exists.
+      const want = subOrDub ?? "softsub";
       const players = await this.fetchEpisodePlayers(episodeId);
-      return players
-        .filter((p) => this.langMatches(p.lang, subOrDub))
+      let matching = players.filter((p) => this.langMatches(p.lang, want));
+      if (matching.length === 0 && !subOrDub) {
+        matching = players;
+      }
+      return matching
         .map((p) => ({
           name: `anikai ${p.name}${this.langSuffix(p.lang)}`.toLowerCase(),
           url: p.url,
@@ -766,9 +775,16 @@ export class AnimeKai {
     type?: "softsub" | "dub" | "hardsub",
   ): Promise<any> {
     try {
-      const want = type ?? "hardsub";
+      // animekai.be serves "sub" and "dub" but not "hsub"/"hardsub". When no
+      // type is specified, prefer softsub but fall back to whatever is available
+      // so the endpoint doesn't return empty results.
+      const want = type ?? "softsub";
       const players = await this.fetchEpisodePlayers(episodeId);
-      const matching = players.filter((p) => this.langMatches(p.lang, want));
+      let matching = players.filter((p) => this.langMatches(p.lang, want));
+      if (matching.length === 0 && !type) {
+        // No softsub — accept any available language rather than returning [].
+        matching = players;
+      }
 
       // Players are third-party embeds rather than the old MegaUp links. Only
       // vivibebe (the default HD-1 host) reduces to a direct stream; otakuhg /

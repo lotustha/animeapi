@@ -243,7 +243,9 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
     // Uncached, this pays for anikai's ~270 KB watch page (~6.5s) plus the
     // vivibebe resolve on every call. Keep the TTL modest: the extracted m3u8
     // is a stable path, but servers do come and go.
-    const key = `animekai:v1:watch:${episodeId}:${type ?? "hardsub"}`;
+    // Default cache key matches the provider's softsub default; animekai.be
+    // doesn't serve hardsub, so the old "hardsub" key only cached empty results.
+    const key = `animekai:v2:watch:${episodeId}:${type ?? "softsub"}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -261,11 +263,13 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
 
     const type = qs?.type as "softsub" | "dub" | "hardsub" | undefined;
 
-    const key = `animekai:v1:servers:${episodeId}:${type ?? "hardsub"}`;
+    // Default cache key matches the provider's softsub default; animekai.be
+    // doesn't serve hardsub, so the old "hardsub" key only cached empty results.
+    const key = `animekai:v2:servers:${episodeId}:${type ?? "softsub"}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return { servers: JSON.parse(cachedData) };
 
-    const servers = await AnimeKai.fetchEpisodeServers(episodeId, type ?? "hardsub");
+    const servers = await AnimeKai.fetchEpisodeServers(episodeId, type);
     if (servers.length > 0) Cache.set(key, JSON.stringify(servers), 1800);
     return { servers };
   })

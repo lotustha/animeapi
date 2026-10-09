@@ -1,6 +1,11 @@
 export const animepahe = "https://animepahe.pw";
-// anikai.to is dead; anikai.cc 302s to the www3 host, so point straight at it.
-export const animekai = "https://www3.anikai.cc";
+// www3.anikai.cc is dead (timeout since mid-2026). animekai.be is a functional
+// clone with the same AJAX API structure (/watch/{slug}/ep/{num}/sources).
+export const animekai = "https://animekai.be";
+export const ANIMEKAI_MIRRORS = [
+  "https://animekai.be",
+  "https://animekai.to",
+] as const;
 export const anigo = "https://anigo.to";
 export const hianime = "https://hianime.at";
 export const anizen = "https://anizen.tr";

@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
 import { getFillerEpisodes, resolveMalId } from "../../../core/fillers.js";
 import { Logger } from "../../../core/logger.js";
-import { animekai as animekaiOrigin } from "../../origins.js";
+import { animekai as animekaiOrigin, ANIMEKAI_MIRRORS } from "../../origins.js";
 import { USER_AGENT } from "../animepahe/scraper/index.js";
 // The HLS variant parser is provider-agnostic; keep one copy rather than
 // duplicating it per provider.
@@ -18,6 +18,33 @@ import type {
 
 export class AnimeKai {
   private static baseUrl = animekaiOrigin;
+
+  // Mirror failover: tries each domain in ANIMEKAI_MIRRORS until one returns a
+  // successful response. The primary origin (www3.anikai.cc) is dead; rotating
+  // across mirrors keeps streams alive when individual domains go down.
+  private static async fetchWithMirrorFailover(
+    path: string,
+    init?: RequestInit,
+  ): Promise<Response> {
+    const timeout = (init?.signal as AbortSignal)?.timeout ?? 10000;
+    for (const origin of ANIMEKAI_MIRRORS) {
+      try {
+        const url = `${origin}${path}`;
+        const res = await fetch(url, {
+          ...init,
+          signal: AbortSignal.timeout(timeout),
+        });
+        if (res.ok) {
+          this.baseUrl = origin;
+          return res;
+        }
+      } catch {
+        // Network error or timeout — try next mirror.
+      }
+    }
+    // All mirrors failed — fall back to primary with original signal.
+    return fetch(`${animekaiOrigin}${path}`, init);
+  }
 
   private static headers(): Record<string, string> {
     return {
@@ -47,9 +74,19 @@ export class AnimeKai {
     const hit = this.htmlCache.get(url);
     if (hit && Date.now() - hit.at < this.HTML_TTL_MS) return hit.html;
 
-    const res = await fetch(url, {
-      headers: { ...this.headers(), ...(referer ? { Referer: referer } : {}) },
-    });
+    // Extract path for mirror failover; fall back to direct fetch if URL is external.
+    let res: Response | undefined;
+    try {
+      const u = new URL(url);
+      const path = u.pathname + u.search;
+      res = await this.fetchWithMirrorFailover(path, {
+        headers: { ...this.headers(), ...(referer ? { Referer: referer } : {}) },
+      });
+    } catch {
+      res = await fetch(url, {
+        headers: { ...this.headers(), ...(referer ? { Referer: referer } : {}) },
+      });
+    }
     if (!res.ok) return null;
     const html = await res.text();
 
@@ -70,7 +107,15 @@ export class AnimeKai {
     url: string,
   ): Promise<AnimeKaiPagedResult<AnimeKaiSearchItem>> {
     try {
-      const res = await fetch(url, { headers: this.headers() });
+      // Extract path for mirror failover; fall back to direct fetch if URL is external.
+      let res: Response | undefined;
+      try {
+        const u = new URL(url);
+        const path = u.pathname + u.search;
+        res = await this.fetchWithMirrorFailover(path, { headers: this.headers() });
+      } catch {
+        res = await fetch(url, { headers: this.headers() });
+      }
       const html = await res.text();
       const $ = cheerio.load(html);
 
@@ -202,7 +247,7 @@ export class AnimeKai {
 
   static async genres(): Promise<string[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers() });
+      const res = await this.fetchWithMirrorFailover("/home", { headers: this.headers() });
       const html = await res.text();
       const $ = cheerio.load(html);
       const results: string[] = [];
@@ -228,8 +273,8 @@ export class AnimeKai {
     try {
       const tz = 5.5;
       const timestamp = Math.floor(new Date(`${date}T00:00:00Z`).getTime() / 1000);
-      const url = `${this.baseUrl}/ajax/schedule/items?tz=${tz}&time=${timestamp}`;
-      const res = await fetch(url, { headers: this.headers() });
+      const path = `/ajax/schedule/items?tz=${tz}&time=${timestamp}`;
+      const res = await this.fetchWithMirrorFailover(path, { headers: this.headers() });
       const data = await res.json();
       let html = data.result;
       if (typeof html === "object" && html.html) html = html.html;
@@ -258,7 +303,7 @@ export class AnimeKai {
 
   static async spotlight(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/home`, { headers: this.headers() });
+      const res = await this.fetchWithMirrorFailover("/home", { headers: this.headers() });
       const html = await res.text();
       const $ = cheerio.load(html);
       const results: any[] = [];
@@ -310,8 +355,8 @@ export class AnimeKai {
 
   static async suggestions(query: string): Promise<any[]> {
     try {
-      const url = `${this.baseUrl}/ajax/anime/search?keyword=${encodeURIComponent(query.replace(/[\W_]+/g, "+"))}`;
-      const res = await fetch(url, { headers: this.headers() });
+      const path = `/ajax/anime/search?keyword=${encodeURIComponent(query.replace(/[\W_]+/g, "+"))}`;
+      const res = await this.fetchWithMirrorFailover(path, { headers: this.headers() });
       const data = await res.json();
       // Consumet accesses result.html; handle both shapes
       const htmlContent = data.result?.html ?? data.result ?? "";
@@ -616,6 +661,8 @@ export class AnimeKai {
 
     let dead: boolean;
     try {
+      // Player URLs are on third-party hosts (megaplay/vidwish), not animekai mirrors.
+      // Use direct fetch — mirror failover only applies to animekai.be domains.
       const res = await fetch(url, {
         headers: {
           "User-Agent": USER_AGENT,
@@ -790,9 +837,8 @@ export class AnimeKai {
     try {
       const animeSlug = episodeId.split("$")[0]!;
       const epNum = /\$ep=([^$]+)/.exec(episodeId)?.[1] ?? "1";
-      const pageUrl = `${this.baseUrl}/download/${animeSlug}/ep-${epNum}`;
-
-      const res = await fetch(pageUrl, {
+      const path = `/download/${animeSlug}/ep-${epNum}`;
+      const res = await this.fetchWithMirrorFailover(path, {
         headers: { ...this.headers(), Referer: `${this.baseUrl}/watch/${animeSlug}/ep-${epNum}` },
       });
       if (!res.ok) return null;

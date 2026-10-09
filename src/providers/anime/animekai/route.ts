@@ -245,7 +245,7 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
     // is a stable path, but servers do come and go.
     // Default cache key matches the provider's softsub default; animekai.be
     // doesn't serve hardsub, so the old "hardsub" key only cached empty results.
-    const key = `animekai:v2:watch:${episodeId}:${type ?? "softsub"}`;
+    const key = `animekai:v3:watch:${episodeId}:${type ?? "softsub"}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return JSON.parse(cachedData);
 
@@ -265,7 +265,7 @@ export const animekaiRoutes = new Elysia({ prefix: "/animekai" })
 
     // Default cache key matches the provider's softsub default; animekai.be
     // doesn't serve hardsub, so the old "hardsub" key only cached empty results.
-    const key = `animekai:v2:servers:${episodeId}:${type ?? "softsub"}`;
+    const key = `animekai:v3:servers:${episodeId}:${type ?? "softsub"}`;
     const cachedData = await Cache.get(key);
     if (cachedData) return { servers: JSON.parse(cachedData) };
 

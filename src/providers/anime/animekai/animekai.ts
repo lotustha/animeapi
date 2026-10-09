@@ -46,11 +46,11 @@ export class AnimeKai {
     return fetch(`${animekaiOrigin}${path}`, init);
   }
 
-  private static headers(): Record<string, string> {
+  private static headers(accept = "text/html, */*; q=0.01"): Record<string, string> {
     return {
       "User-Agent": USER_AGENT,
       Connection: "keep-alive",
-      Accept: "text/html, */*; q=0.01",
+      Accept: accept,
       "Accept-Language": "en-US,en;q=0.5",
       "Sec-GPC": "1",
       "Sec-Fetch-Dest": "empty",
@@ -60,7 +60,8 @@ export class AnimeKai {
       Pragma: "no-cache",
       "Cache-Control": "no-cache",
       Referer: `${this.baseUrl}/`,
-      Cookie: "__p_mov=1; usertype=guest; session=vLrU4aKItp0QltI2asH83yugyWDsSSQtyl9sxWKO",
+      // No hardcoded cookies — animekai.be issues its own session tokens and
+      // rejects requests carrying stale credentials from other mirrors.
     };
   }
 
@@ -627,7 +628,10 @@ export class AnimeKai {
     try {
       const sourcesPath = `/watch/${animeSlug}/ep/${epNum}/sources`;
       const res = await this.fetchWithMirrorFailover(sourcesPath, {
-        headers: { ...this.headers(), "X-Requested-With": "XMLHttpRequest" },
+        headers: {
+          ...this.headers("application/json, text/javascript, */*; q=0.01"),
+          "X-Requested-With": "XMLHttpRequest",
+        },
       });
       if (res.ok) {
         const data = (await res.json()) as any;

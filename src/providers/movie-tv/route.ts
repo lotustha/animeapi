@@ -4,6 +4,7 @@ import { yFlixRoutes } from "./yflix/route.js";
 import { himoviesRoutes } from "./himovies/route.js";
 import { flixhqRoutes } from "./flixhq/route.js";
 import { nartoDramaRoutes } from "./nartodrama/route.js";
+import { shortspodRoutes } from "./shortspod/route.js";
 import { movieBoxRoutes } from "./moviebox/route.js";
 
 export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
@@ -12,6 +13,7 @@ export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
   .use(himoviesRoutes)
   .use(flixhqRoutes)
   .use(nartoDramaRoutes)
+  .use(shortspodRoutes)
   .use(movieBoxRoutes)
 
   // ─── Overview Endpoint ────────────────────────────────────────────────────────
@@ -20,7 +22,7 @@ export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
     () => ({
       service: "movie-tv",
       description: "Unified Movie & TV API — provider-isolated route architecture",
-      providers: ["primesrc", "yflix", "himovies", "flixhq", "nartodrama", "moviebox"],
+      providers: ["primesrc", "yflix", "himovies", "flixhq", "nartodrama", "shortspod", "moviebox"],
       endpoints: {
         primesrc: [
           "GET /movie-tv/primesrc/movie/:tmdbid   → Get movie sources",
@@ -68,6 +70,11 @@ export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
           "GET /movie-tv/nartodrama/tag/:tag?page=1   → Browse by tag",
           "GET /movie-tv/nartodrama/info/:slug        → Series info & episode list",
           "GET /movie-tv/nartodrama/watch/:slug/:episode → Episode stream sources",
+        ],
+        shortspod: [
+          "GET /movie-tv/shortspod/home?page=1         → Ranking-based short drama listings",
+          "GET /movie-tv/shortspod/info/:id            → Series info & episode list (from NdPlayMvData)",
+          "GET /movie-tv/shortspod/watch/:id/:episode  → Direct MP4 stream (Referer-gated CDN)",
         ],
         moviebox: [
           "GET /movie-tv/moviebox/trending?page=1    → Trending movies & TV",

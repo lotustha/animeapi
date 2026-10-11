@@ -53,6 +53,11 @@ export const himovies = "https://himovies.to";
 // not the main domain — nginx there 403s /refresh-source outright.
 export const nartodrama = "https://narto-drama.com";
 export const nartodrama_edge = "https://edge.narto-drama.com";
+// ShortsPod short-drama site. Server-rendered ASP.NET; episode data lives in
+// window.NdPlayMvData on /play/{id}/{ep}/ pages. Video CDN (img18.shortspod.com)
+// requires Referer: https://www.shortspod.com/ or returns 403.
+export const shortspod = "https://www.shortspod.com";
+export const shortspod_cdn = "https://img18.shortspod.com";
 // MovieBox web front-end and its aoneroom BFF. The play endpoint only returns
 // streams when the Referer is `${moviebox}/movies/<detailPath>`, and the video
 // CDN 429s without a moviebox Referer.

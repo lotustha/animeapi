@@ -110,11 +110,25 @@ export class ShortsPod {
   }
 
   /**
-   * Search is not available on ShortsPod — returns empty.
-   * The ani-nexus layer can fall back to nartodrama for search.
+   * Search via /search/?key=<query>.
+   *
+   * The search results page uses the same anchor+image card layout as ranking
+   * pages, so parseCards handles both. Pagination is not implemented — the
+   * site does not expose page links on search results, and the first page
+   * typically returns enough matches for a typeahead-style lookup.
    */
-  static async search(_query: string, _page = 1): Promise<Paginated<DramaCard>> {
-    return { ...EMPTY_PAGE };
+  static async search(query: string, _page = 1): Promise<Paginated<DramaCard>> {
+    if (!query || !query.trim()) return { ...EMPTY_PAGE };
+    try {
+      const url = `${shortspod}/search/?key=${encodeURIComponent(query.trim())}`;
+      const html = await this.fetchHtml(url);
+      const $ = cheerio.load(html);
+      const results = this.parseCards($);
+      return { currentPage: 1, hasNextPage: false, results };
+    } catch (err) {
+      Logger.error(err);
+      return { ...EMPTY_PAGE };
+    }
   }
 
   // ─── Series info + episodes ──────────────────────────────────────────────────

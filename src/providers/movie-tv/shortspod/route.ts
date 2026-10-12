@@ -15,6 +15,7 @@ export const shortspodRoutes = new Elysia({ prefix: "/shortspod" })
     description: "ShortsPod short drama provider (primary)",
     endpoints: [
       "/shortspod/home?page=1",
+      "/shortspod/search?key=query",
       "/shortspod/info/:id",
       "/shortspod/watch/:id/:episode",
     ],
@@ -31,6 +32,24 @@ export const shortspodRoutes = new Elysia({ prefix: "/shortspod" })
     if (results.results.length > 0) Cache.set(key, JSON.stringify(results), LISTING_TTL);
     return results;
   })
+
+  // ─── Search ────────────────────────────────────────────────────────────────
+  .get(
+    "/search",
+    async ({ query, status }) => {
+      const q = query?.key as string | undefined;
+      if (!q || !q.trim()) return status(400, { message: "Missing search key" });
+      const page = parseInt(query?.page as string) || 1;
+      const key = `shortspod:search:${q.trim()}:${page}`;
+      const cached = await Cache.get(key);
+      if (cached) return JSON.parse(cached);
+
+      const results = await ShortsPod.search(q, page);
+      Cache.set(key, JSON.stringify(results), LISTING_TTL);
+      return results;
+    },
+    { query: t.Object({ key: t.String(), page: t.Optional(t.String()) }) },
+  )
 
   // ─── Info + episode list ───────────────────────────────────────────────────
   .get(

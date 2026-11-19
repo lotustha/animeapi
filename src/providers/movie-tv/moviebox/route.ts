@@ -152,7 +152,8 @@ export const movieBoxRoutes = new Elysia({ prefix: "/moviebox" })
     async ({ params: { query: term }, query }) => {
       const page = parseInt(query?.page as string) || 1;
       const type = readType(query?.type);
-      const key = `moviebox:search:${type}:${term}:${page}`;
+      // v2: results now include high-risk movies.
+      const key = `moviebox:search:v2:${type}:${term}:${page}`;
       const cached = await Cache.get(key);
       if (cached) return JSON.parse(cached);
 

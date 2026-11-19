@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Cache } from "../../../core/cache.js";
 import { Logger } from "../../../core/logger.js";
 import { proxifyFetch, proxifySource } from "../../../core/proxy.js";
 import { moviebox, moviebox_api } from "../../origins.js";
@@ -10,7 +11,9 @@ import {
   playSchema,
   rawSchema,
   searchSchema,
+  subjectSchema,
   trendingSchema,
+  type MovieBoxCard,
   type MovieBoxDub,
   type MovieBoxFilter,
   type MovieBoxInfo,
@@ -99,6 +102,42 @@ const toItem = (s: {
 
 const splitList = (value?: string) => (value ? value.split(",").filter(Boolean) : []);
 
+// "High risk" titles (`webHighRisk` on the card, e.g. a film still in cinemas).
+// The BFF leaves them out of every list unless the call carries
+// X-No-High-Risk-Restrict, which the site sends on all its calls, and it
+// answers their /detail with 404 "high risk" even then — yet /subject/play
+// serves them. So the card search returned is the only description there is:
+// it is kept here, under both of the title's keys, to stand in for the detail.
+const HIGH_RISK_TTL = 30 * 24 * 3600;
+const HIGH_RISK_MAX = 2000;
+const highRisk = new Map<string, MovieBoxCard>();
+
+const rememberHighRisk = (card: MovieBoxCard) => {
+  for (const key of [card.subjectId, card.detailPath]) {
+    highRisk.delete(key);
+    highRisk.set(key, card);
+    // Survives a restart where a cache backend is configured (a no-op otherwise).
+    void Cache.set(`moviebox:highrisk:${key}`, JSON.stringify(card), HIGH_RISK_TTL);
+  }
+  while (highRisk.size > HIGH_RISK_MAX) highRisk.delete(highRisk.keys().next().value!);
+};
+
+/** The remembered card of a high-risk title, by subjectId or detailPath. */
+const recallHighRisk = async (key: string): Promise<MovieBoxCard | null> => {
+  const held = highRisk.get(key);
+  if (held) return held;
+  const cached = await Cache.get(`moviebox:highrisk:${key}`);
+  if (!cached) return null;
+  try {
+    return subjectSchema.safeParse(JSON.parse(cached)).data ?? null;
+  } catch {
+    return null;
+  }
+};
+
+// A movie is a single "season 0" upstream; a remembered card says no more.
+const MOVIE_SEASON = { se: 0, maxEp: 0, allEp: "", resolutions: [] };
+
 // Rows added to the top of /home, in order. Each is one of the site's browse
 // filters, the same list MovieBox's own "Categories" tiles open.
 const HOME_ROWS: { title: string; filter: MovieBoxFilter }[] = [
@@ -110,7 +149,7 @@ export class MovieBox {
   /** Authenticated BFF call. Retries once with a fresh session if the token was refused. */
   private static async api(
     path: string,
-    init: { method?: "GET" | "POST"; body?: unknown; referer?: string } = {},
+    init: { method?: "GET" | "POST"; body?: unknown; referer?: string; highRisk?: boolean } = {},
     retry = true,
   ): Promise<unknown> {
     const token = await getToken();
@@ -126,6 +165,7 @@ export class MovieBox {
           Accept: "application/json",
           "User-Agent": UA,
           ...(init.referer ? { Referer: init.referer } : {}),
+          ...(init.highRisk ? { "X-No-High-Risk-Restrict": "1" } : {}),
         },
         body: init.body ? JSON.stringify(init.body) : undefined,
         signal: controller.signal,
@@ -240,9 +280,15 @@ export class MovieBox {
     );
   }
 
-  /** Full detail (`subject`, `stars`, `resource`, …) keyed by subjectId. */
-  static detail(subjectId: string) {
-    return this.raw(`/detail?subjectId=${encodeURIComponent(subjectId)}`);
+  /**
+   * Full detail (`subject`, `stars`, `resource`, …) keyed by subjectId. A
+   * high-risk movie has no detail upstream; it gets one built from its card.
+   */
+  static async detail(subjectId: string) {
+    const data = await this.raw(`/detail?subjectId=${encodeURIComponent(subjectId)}`);
+    if (data != null) return data;
+    const card = await recallHighRisk(subjectId);
+    return card ? { subject: card, stars: [], resource: { seasons: [MOVIE_SEASON] } } : null;
   }
 
   /** Search-as-you-type words (`items`). */
@@ -259,15 +305,23 @@ export class MovieBox {
       await this.api("/subject/search", {
         method: "POST",
         body: { keyword: query, page, perPage: 24, subjectType },
+        highRisk: true,
       }),
     );
     if (!parsed.success || parsed.data.code !== 0 || !parsed.data.data) {
       Logger.warn(`moviebox: search "${query}" returned an unexpected shape`);
       return { page, hasNextPage: false, results: [] as MovieBoxItem[] };
     }
-    const results = cleanResults(
-      (parsed.data.data.items ?? []).map(toItem).filter((i): i is MovieBoxItem => i !== null),
-    );
+    // High-risk movies are kept, their cards remembered for detail and watch.
+    // High-risk shows are left out: without /detail nothing lists their
+    // seasons and episodes.
+    const cards = (parsed.data.data.items ?? []).filter((card) => {
+      if (card.webHighRisk !== true) return true;
+      if (card.subjectType !== 1) return false;
+      rememberHighRisk(card);
+      return true;
+    });
+    const results = cleanResults(cards.map(toItem).filter((i): i is MovieBoxItem => i !== null));
     return { page, hasNextPage: parsed.data.data.pager.hasMore, results };
   }
 
@@ -311,9 +365,14 @@ export class MovieBox {
     const parsed = detailSchema.safeParse(
       await this.api(`/detail?detailPath=${encodeURIComponent(id)}`),
     );
-    if (!parsed.success || parsed.data.code !== 0 || !parsed.data.data) return null;
+    let detail = parsed.success && parsed.data.code === 0 ? parsed.data.data : null;
+    if (!detail) {
+      const card = await recallHighRisk(id);
+      if (!card) return null;
+      detail = { subject: card, stars: [], resource: { seasons: [MOVIE_SEASON] } };
+    }
 
-    const { subject, stars, resource } = parsed.data.data;
+    const { subject, stars, resource } = detail;
     const item = toItem(subject);
     if (!item) return null;
 

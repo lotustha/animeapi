@@ -62,6 +62,9 @@ export const subjectSchema = z
   })
   .loose();
 
+/** A subject card as MovieBox sends it (the schema is loose, so extra fields ride along). */
+export type MovieBoxCard = z.infer<typeof subjectSchema>;
+
 export const searchSchema = envelope(
   z
     .object({

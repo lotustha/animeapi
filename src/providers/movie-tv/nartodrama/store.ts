@@ -251,20 +251,58 @@ export function putSeries(info: DramaInfo, provider = "", lang: string): void {
 }
 
 /** Search the local catalogue in one locale — no upstream request at all. */
+/** A query as the words to look for: lower-cased, at most six, none empty. */
+export function searchWords(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}']+/u)
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+/** Escape LIKE's wildcards (paired with `ESCAPE '!'`) so input matches literally. */
+function likeEscape(value: string): string {
+  return value.replace(/[!%_]/g, (c) => `!${c}`);
+}
+
 export function searchSeries(query: string, limit = 24, offset = 0, lang: string) {
   const handle = init();
   if (!handle) return null;
 
   try {
+    // Every word must appear, in any order: "boss mafia" finds "Mafia Boss".
+    // One LIKE on the whole phrase found nothing for that, and nothing for a
+    // title with punctuation between the words either.
+    const words = searchWords(query);
+    if (words.length === 0) return [];
+    const phrase = likeEscape(words.join(" "));
+    const everyWord = words.map(() => "title LIKE ? ESCAPE '!'").join(" AND ");
+
+    // Best match first, then newest. The order is total (slug last) so that
+    // OFFSET paging cannot repeat or skip a row.
     const rows = handle
       .query(
         `SELECT slug, title, poster, provider, total_episodes
            FROM series
-          WHERE lang = ? AND title LIKE ?
-          ORDER BY updated_at DESC
+          WHERE lang = ? AND ${everyWord}
+          ORDER BY CASE
+                     WHEN lower(title) = ? THEN 0
+                     WHEN title LIKE ? ESCAPE '!' THEN 1
+                     WHEN title LIKE ? ESCAPE '!' THEN 2
+                     ELSE 3
+                   END,
+                   updated_at DESC, slug
           LIMIT ? OFFSET ?`,
       )
-      .all(lang, `%${query}%`, limit, offset);
+      .all(
+        lang,
+        ...words.map((w) => `%${likeEscape(w)}%`),
+        words.join(" "),
+        `${phrase}%`,
+        `%${phrase}%`,
+        limit,
+        offset,
+      );
 
     return rows.map((r: any) => ({
       id: r.slug,

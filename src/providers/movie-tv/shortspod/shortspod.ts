@@ -57,8 +57,12 @@ export class ShortsPod {
     // on the page layout; we try multiple common patterns.
     $("a[href*='/movies/']").each((_, el) => {
       const link = $(el);
+      // The site's header carries `/movies/1/` ("Genres") as a menu link, which
+      // has exactly the shape of a title link. It was being returned as the
+      // first "series" of every listing and every search.
+      if ((link.attr("class") || "").includes("top-menu")) return;
       const href = link.attr("href") || "";
-      const match = href.match(/\/movies\/(\d+)/);
+      const match = href.match(/\/movies\/(\d+)\/?(?:[?#].*)?$/);
       if (!match) return;
 
       const id = match[1];
@@ -141,6 +145,10 @@ export class ShortsPod {
    * with direct MP4 URLs in window.NdPlayMvData. We fetch both in parallel.
    */
   static async info(id: string): Promise<DramaInfo | null> {
+    // ShortsPod ids are numeric. Anything else is a slug from another provider,
+    // and the site answers those with a 200 "Page Not Found" page that used to
+    // be parsed into a series of that name with no episodes.
+    if (!/^\d+$/.test(id)) return null;
     try {
       const [detailHtml, playHtml] = await Promise.all([
         this.fetchHtml(`${shortspod}/movies/${id}/`),
@@ -154,7 +162,7 @@ export class ShortsPod {
         $detail("title").text().split("-")[0].trim() ||
         "";
 
-      if (!title) return null;
+      if (!title || /^page not found$/i.test(title)) return null;
 
       const poster = this.absolute(
         $detail("meta[property='og:image']").attr("content") ||

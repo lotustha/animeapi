@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { browserCheckCookie, isBrowserCheck } from "./browser-check.js";
+import { browserCheckCookie, isBrowserCheck, isVpnWall } from "./browser-check.js";
 
 // narto put its listing pages behind a "Checking your browser" stub on or
 // before 2026-09-17: a page that sets `nd_ck` and reloads. The scraper got the
@@ -31,5 +31,23 @@ describe("isBrowserCheck", () => {
 
   it("does not flag a large page that happens to mention nd_ck", () => {
     expect(isBrowserCheck("x".repeat(50_000) + "nd_ck")).toBe(false);
+  });
+});
+
+// 2026-11-19: narto answered /search from our server with this page for at
+// least a week. 200, no cards, so every search came back "no results".
+describe("isVpnWall", () => {
+  it("recognises the wall", () => {
+    const wall =
+      "<!doctype html><html><head><title>Turn off VPN / Proxy</title></head><body>" +
+      "x".repeat(10_000) +
+      "</body></html>";
+    expect(isVpnWall(wall)).toBe(true);
+    expect(isBrowserCheck(wall)).toBe(false);
+  });
+
+  it("does not mistake a results page for it", () => {
+    const real = `<html><head><title>Search Results for "vpn" - Narto Drama</title></head><body>${'<article class="card"></article>'.repeat(3)}</body></html>`;
+    expect(isVpnWall(real)).toBe(false);
   });
 });

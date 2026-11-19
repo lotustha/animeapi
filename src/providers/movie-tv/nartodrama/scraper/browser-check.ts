@@ -30,3 +30,16 @@ export function browserCheckCookie(): string {
 export function isBrowserCheck(html: string): boolean {
   return html.length < 20_000 && html.includes("nd_ck");
 }
+
+/**
+ * narto's "Turn off VPN / Proxy" page.
+ *
+ * A different wall from the one above, and no cookie passes it: it is served
+ * by IP, to datacenter addresses, and (measured 2026-11-19) on /search only -
+ * home and browse still answer the same server. It is an ~11 KB page with a
+ * 200 status and no cards, so the scraper parsed it into "no results" for
+ * every search for at least a week without logging anything.
+ */
+export function isVpnWall(html: string): boolean {
+  return html.length < 40_000 && /<title>\s*Turn off VPN/i.test(html);
+}

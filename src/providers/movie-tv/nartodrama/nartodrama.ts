@@ -38,14 +38,28 @@ import type {
   RefreshSource,
   UpstreamProvider,
 } from "./types.js";
-import { browserCheckCookie, isBrowserCheck } from "./scraper/browser-check.js";
+import { browserCheckCookie, isBrowserCheck, isVpnWall } from "./scraper/browser-check.js";
 import { nartoBudget } from "./scraper/narto-budget.js";
 import { alternateSource } from "./scraper/alternate-source.js";
 import { inc } from "../../../core/counters.js";
 
 const EMPTY_PAGE: Paginated<DramaCard> = { currentPage: 1, hasNextPage: false, results: [] };
 
+/** narto refused this server by IP. See `isVpnWall`. */
+export class NartoWalledError extends Error {
+  constructor(url: string) {
+    super(`narto VPN/proxy wall: ${url}`);
+    this.name = "NartoWalledError";
+  }
+}
+
+/** How long a walled search is not asked again. The wall is by IP, not by term. */
+const SEARCH_WALL_COOLDOWN_MS = 30 * 60_000;
+
 export class NartoDrama {
+  /** When narto last walled /search, so the next ask can skip the round trip. */
+  private static searchWalledAt = 0;
+
   private static async fetchHtml(url: string) {
     const res = await fetch(url, {
       headers: {
@@ -61,6 +75,7 @@ export class NartoDrama {
     // Thrown, not parsed: the stub has no cards, and an empty page is how the
     // last wall went unnoticed for a week.
     if (isBrowserCheck(html)) throw new Error(`narto browser check not passed: ${url}`);
+    if (isVpnWall(html)) throw new NartoWalledError(url);
     return cheerio.load(html);
   }
 
@@ -173,7 +188,12 @@ export class NartoDrama {
     query: string,
     page = 1,
     lang: string = LANG,
-  ): Promise<Paginated<DramaCard>> {
+  ): Promise<Paginated<DramaCard> & { walled?: boolean }> {
+    // `walled` tells the route this is "narto would not say", not "narto found
+    // nothing", so it can answer from the local catalogue instead.
+    if (Date.now() - this.searchWalledAt < SEARCH_WALL_COOLDOWN_MS) {
+      return { ...EMPTY_PAGE, currentPage: page, walled: true };
+    }
     try {
       const url = new URL(nartodrama + "/search");
       url.searchParams.set("q", query);
@@ -187,6 +207,14 @@ export class NartoDrama {
         results: this.parseCards($),
       };
     } catch (err) {
+      if (err instanceof NartoWalledError) {
+        // Logged once per cooldown, not once per search: ~300 asks a day.
+        this.searchWalledAt = Date.now();
+        Logger.warn(
+          "nartodrama: /search is behind the VPN wall - answering search from the local catalogue for 30 min",
+        );
+        return { ...EMPTY_PAGE, currentPage: page, walled: true };
+      }
       Logger.error(err);
       return { ...EMPTY_PAGE, currentPage: page };
     }

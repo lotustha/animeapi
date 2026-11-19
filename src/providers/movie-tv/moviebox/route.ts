@@ -113,9 +113,12 @@ export const movieBoxRoutes = new Elysia({ prefix: "/moviebox" })
 
   .get(
     "/detail/:subjectId",
-    async ({ params: { subjectId }, status }) => {
+    async ({ params: { subjectId }, query, status }) => {
+      // ?path=<detailPath>: lets a high-risk title (no detail upstream) be
+      // found again by name when its card isn't remembered.
+      const path = (query?.path as string | undefined) || undefined;
       const data = await cachedRaw(`moviebox:detail:${subjectId}`, INFO_TTL, () =>
-        MovieBox.detail(subjectId),
+        MovieBox.detail(subjectId, path),
       );
       return data ?? status(404, { message: "Title not found" });
     },
@@ -152,8 +155,8 @@ export const movieBoxRoutes = new Elysia({ prefix: "/moviebox" })
     async ({ params: { query: term }, query }) => {
       const page = parseInt(query?.page as string) || 1;
       const type = readType(query?.type);
-      // v2: results now include high-risk movies.
-      const key = `moviebox:search:v2:${type}:${term}:${page}`;
+      // v3: results now include high-risk movies and shows.
+      const key = `moviebox:search:v3:${type}:${term}:${page}`;
       const cached = await Cache.get(key);
       if (cached) return JSON.parse(cached);
 

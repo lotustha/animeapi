@@ -136,7 +136,23 @@ const recallHighRisk = async (key: string): Promise<MovieBoxCard | null> => {
 };
 
 // A movie is a single "season 0" upstream; a remembered card says no more.
-const MOVIE_SEASON = { se: 0, maxEp: 0, allEp: "", resolutions: [] };
+const MOVIE_SEASON: ProbedSeason = { se: 0, maxEp: 0, allEp: "", resolutions: [] };
+
+// A high-risk show's seasons, worked out from /subject/play (see probeSeasons).
+// Kept half a day: a running show gains episodes.
+type ProbedSeason = {
+  se: number;
+  maxEp: number;
+  allEp: string;
+  resolutions: { resolution: number }[];
+};
+const PROBE_TTL = 12 * 3600;
+const PROBE_MAX_SEASONS = 40;
+const PROBE_MAX_EPISODES = 4096;
+const probed = new Map<string, { seasons: ProbedSeason[]; expiresAt: number }>();
+const probing = new Map<string, Promise<ProbedSeason[]>>();
+
+const SEASON_RANGE = /\s+S\d+(?:-S\d+)?$/i;
 
 // Rows added to the top of /home, in order. Each is one of the site's browse
 // filters, the same list MovieBox's own "Categories" tiles open.
@@ -282,13 +298,153 @@ export class MovieBox {
 
   /**
    * Full detail (`subject`, `stars`, `resource`, …) keyed by subjectId. A
-   * high-risk movie has no detail upstream; it gets one built from its card.
+   * high-risk title has no detail upstream; it gets one built from its card,
+   * which `detailPath` (when the client knows it) lets us look up again.
    */
-  static async detail(subjectId: string) {
+  static async detail(subjectId: string, detailPath?: string) {
     const data = await this.raw(`/detail?subjectId=${encodeURIComponent(subjectId)}`);
     if (data != null) return data;
-    const card = await recallHighRisk(subjectId);
-    return card ? { subject: card, stars: [], resource: { seasons: [MOVIE_SEASON] } } : null;
+    const card =
+      (await recallHighRisk(subjectId)) ??
+      (detailPath ? await this.recoverHighRisk(detailPath, subjectId) : null);
+    return card ? this.cardDetail(card) : null;
+  }
+
+  // ─── High-risk titles: a detail without /detail ────────────────────────────
+
+  /** One page of raw search cards, high-risk ones included; null on failure. */
+  private static async cards(keyword: string, page = 1, subjectType = 0) {
+    const parsed = searchSchema.safeParse(
+      await this.api("/subject/search", {
+        method: "POST",
+        body: { keyword, page, perPage: 24, subjectType },
+        highRisk: true,
+      }),
+    );
+    if (!parsed.success || parsed.data.code !== 0 || !parsed.data.data) return null;
+    return parsed.data.data;
+  }
+
+  /**
+   * Finds a high-risk title's card when nothing remembered it (a saved title
+   * flagged later, a restart): its detailPath is its name as a slug plus an
+   * id, so a search for the name turns the card up. A dub's slug ends in its
+   * language, which search may not match, hence the second, shorter try.
+   */
+  private static async recoverHighRisk(detailPath: string, subjectId?: string) {
+    const words = detailPath
+      .replace(/-[A-Za-z0-9]+$/, "")
+      .split("-")
+      .filter(Boolean);
+    for (const count of [words.length, words.length - 1]) {
+      if (count < 1) break;
+      const page = await this.cards(words.slice(0, count).join(" "));
+      const card = page?.items?.find(
+        (c) => c.webHighRisk === true && (c.detailPath === detailPath || c.subjectId === subjectId),
+      );
+      if (card) {
+        rememberHighRisk(card);
+        return card;
+      }
+    }
+    return null;
+  }
+
+  /** The resolutions of one episode's streams; [] when it doesn't exist, null when unknown. */
+  private static async episodeResolutions(card: MovieBoxCard, se: number, ep: number) {
+    const query = `subjectId=${card.subjectId}&se=${se}&ep=${ep}&detailPath=${encodeURIComponent(card.detailPath)}`;
+    const parsed = playSchema.safeParse(
+      await this.api(`/subject/play?${query}`, {
+        referer: `${moviebox}/movies/${card.detailPath}`,
+      }).catch(() => null),
+    );
+    if (!parsed.success || parsed.data.code !== 0) return null;
+    return (parsed.data.data?.streams ?? []).map((s) => Number(s.resolutions) || 0);
+  }
+
+  /**
+   * A high-risk show's seasons, found by asking /subject/play which episodes
+   * exist: seasons are walked from 1 until one has no first episode, and each
+   * season's last episode is found by doubling then halving (about 2·log2(n)
+   * calls). It assumes episodes are numbered 1..n without gaps, which /detail
+   * would have told us and nothing else does.
+   */
+  private static probeSeasons(card: MovieBoxCard): Promise<ProbedSeason[]> {
+    const key = card.subjectId;
+    const held = probed.get(key);
+    if (held && held.expiresAt > Date.now()) return Promise.resolve(held.seasons);
+    const running = probing.get(key);
+    if (running) return running;
+
+    const run = (async () => {
+      const cached = await Cache.get(`moviebox:highrisk-seasons:${key}`);
+      if (cached) {
+        try {
+          const seasons = JSON.parse(cached) as ProbedSeason[];
+          probed.set(key, { seasons, expiresAt: Date.now() + PROBE_TTL * 1000 });
+          return seasons;
+        } catch {
+          // probe afresh
+        }
+      }
+
+      let certain = true;
+      let resolutions: { resolution: number }[] = [];
+      const has = async (se: number, ep: number) => {
+        const found = await this.episodeResolutions(card, se, ep);
+        if (found === null) certain = false;
+        if (found?.length && resolutions.length === 0) {
+          resolutions = [...new Set(found)].filter(Boolean).map((resolution) => ({ resolution }));
+        }
+        return (found?.length ?? 0) > 0;
+      };
+
+      const numbers: number[] = [];
+      for (let se = 1; se <= PROBE_MAX_SEASONS && (await has(se, 1)); se++) numbers.push(se);
+
+      const seasons = await Promise.all(
+        numbers.map(async (se) => {
+          let lo = 1; // exists
+          let hi = 2; // first one not known to exist
+          while (hi <= PROBE_MAX_EPISODES && (await has(se, hi))) {
+            lo = hi;
+            hi *= 2;
+          }
+          while (hi - lo > 1) {
+            const mid = (lo + hi) >> 1;
+            if (await has(se, mid)) lo = mid;
+            else hi = mid;
+          }
+          return { se, maxEp: lo, allEp: "", resolutions };
+        }),
+      );
+
+      // A probe cut short by a timeout may have undercounted: use it for this
+      // answer, but ask again next time rather than keep it.
+      if (certain) {
+        probed.set(key, { seasons, expiresAt: Date.now() + PROBE_TTL * 1000 });
+        void Cache.set(`moviebox:highrisk-seasons:${key}`, JSON.stringify(seasons), PROBE_TTL);
+      } else {
+        Logger.warn(`moviebox: season probe of ${card.detailPath} was incomplete`);
+      }
+      return seasons;
+    })().finally(() => probing.delete(key));
+
+    probing.set(key, run);
+    return run;
+  }
+
+  /** A detail payload in /detail's shape, built from a high-risk title's card. */
+  private static async cardDetail(card: MovieBoxCard) {
+    if (card.subjectType !== 2) {
+      return { subject: card, stars: [], resource: { seasons: [MOVIE_SEASON] } };
+    }
+    return {
+      // Search titles a show "Name S1-S3"; /detail gives the bare name.
+      subject: { ...card, title: card.title.replace(SEASON_RANGE, "").trim() },
+      stars: [],
+      resource: { seasons: await this.probeSeasons(card) },
+    };
   }
 
   /** Search-as-you-type words (`items`). */
@@ -301,28 +457,16 @@ export class MovieBox {
 
   static async search(query: string, page = 1, type: MovieBoxType | "all" = "all") {
     const subjectType = type === "movie" ? 1 : type === "tv" ? 2 : 0;
-    const parsed = searchSchema.safeParse(
-      await this.api("/subject/search", {
-        method: "POST",
-        body: { keyword: query, page, perPage: 24, subjectType },
-        highRisk: true,
-      }),
-    );
-    if (!parsed.success || parsed.data.code !== 0 || !parsed.data.data) {
+    const data = await this.cards(query, page, subjectType);
+    if (!data) {
       Logger.warn(`moviebox: search "${query}" returned an unexpected shape`);
       return { page, hasNextPage: false, results: [] as MovieBoxItem[] };
     }
-    // High-risk movies are kept, their cards remembered for detail and watch.
-    // High-risk shows are left out: without /detail nothing lists their
-    // seasons and episodes.
-    const cards = (parsed.data.data.items ?? []).filter((card) => {
-      if (card.webHighRisk !== true) return true;
-      if (card.subjectType !== 1) return false;
-      rememberHighRisk(card);
-      return true;
-    });
+    // High-risk titles have no /detail: their cards are remembered to build one.
+    const cards = data.items ?? [];
+    for (const card of cards) if (card.webHighRisk === true) rememberHighRisk(card);
     const results = cleanResults(cards.map(toItem).filter((i): i is MovieBoxItem => i !== null));
-    return { page, hasNextPage: parsed.data.data.pager.hasMore, results };
+    return { page, hasNextPage: data.pager.hasMore, results };
   }
 
   /**
@@ -367,9 +511,9 @@ export class MovieBox {
     );
     let detail = parsed.success && parsed.data.code === 0 ? parsed.data.data : null;
     if (!detail) {
-      const card = await recallHighRisk(id);
+      const card = (await recallHighRisk(id)) ?? (await this.recoverHighRisk(id));
       if (!card) return null;
-      detail = { subject: card, stars: [], resource: { seasons: [MOVIE_SEASON] } };
+      detail = await this.cardDetail(card);
     }
 
     const { subject, stars, resource } = detail;

@@ -1,6 +1,7 @@
 import { Logger } from "../../../core/logger.js";
 import { proxifySource } from "../../../core/proxy.js";
 import { inc } from "../../../core/counters.js";
+import { checkDelivery, routeFor } from "./delivers.js";
 import type {
   DramaInfo,
   DramaSource,
@@ -284,25 +285,41 @@ export class Dramatip {
 
     const { entry, play } = picked;
     const origin = { Origin: DRAMATIP, Referer: `${DRAMATIP}/` };
-    const source: DramaSource =
-      play.how === "origin-proxy"
-        ? {
-            // The CDN answers only dramatip's origin, so there is no link a
-            // player could open by itself: `directUrl` stays empty and the
-            // stream goes through our proxy, which sends the header.
-            url: proxifySource(play.url, origin, true),
-            quality: "default",
-            isM3U8: true,
-            proxied: true,
-            directUrl: "",
-          }
-        : {
-            url: proxifySource(play.url, undefined, play.isM3U8),
-            quality: "default",
-            isM3U8: play.isM3U8,
-            proxied: true,
-            directUrl: play.url,
-          };
+
+    // A LINK IS NOT A STREAM UNTIL IT HAS BEEN FETCHED (see delivers.ts).
+    // `sendWith` is what our proxy must send for the host to answer; when it
+    // is set there is no link a player could open by itself, so `directUrl`
+    // stays empty and the stream goes through the proxy.
+    let sendWith: Record<string, string> | undefined;
+    if (play.how === "origin-proxy") {
+      // The media proxy answers only dramatip's origin - when it answers.
+      if ((await checkDelivery(play.url, origin)) === "no") {
+        inc("dramatip.refused.origin_proxy");
+        Logger.warn(`dramatip: media proxy refused ${slug} ep ${episode}`);
+        return null;
+      }
+      sendWith = origin;
+    } else {
+      const route = await routeFor(play.url, origin);
+      if (route.via === "none") {
+        inc("dramatip.refused.direct");
+        Logger.warn(`dramatip: ${new URL(play.url).host} refused ${slug} ep ${episode}`);
+        return null;
+      }
+      if (route.via === "proxy") {
+        inc("dramatip.needs_referer");
+        sendWith = route.headers;
+      }
+    }
+
+    const sourceFor = (url: string, quality: string): DramaSource => ({
+      url: proxifySource(url, sendWith, play.isM3U8),
+      quality,
+      isM3U8: play.isM3U8,
+      proxied: true,
+      directUrl: sendWith ? "" : url,
+    });
+    const source = sourceFor(play.url, "default");
 
     // Other sizes of the same stream, when the app publishes them separately.
     const qualities: DramaSource[] = [];
@@ -311,13 +328,7 @@ export class Dramatip {
         try {
           const url = decrypt(enc, this.key);
           if (url === play.url || /\.encrypt\./i.test(url)) continue;
-          qualities.push({
-            url: proxifySource(url, undefined, play.isM3U8),
-            quality: /^\d+$/.test(label) ? `${label}p` : label,
-            isM3U8: play.isM3U8,
-            proxied: true,
-            directUrl: url,
-          });
+          qualities.push(sourceFor(url, /^\d+$/.test(label) ? `${label}p` : label));
         } catch {
           /* one size failing to decrypt costs only that size */
         }

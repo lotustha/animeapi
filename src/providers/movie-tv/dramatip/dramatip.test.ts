@@ -197,3 +197,43 @@ describe("choosing a source", () => {
     );
   });
 });
+
+// ── delivers.ts ─────────────────────────────────────────────────────────────
+
+import { checkDelivery, routeFor } from "./delivers.js";
+
+const answering = (statusFor: (headers: Record<string, string>) => number) =>
+  async (_url: string, init: RequestInit) =>
+    new Response(null, { status: statusFor((init.headers ?? {}) as Record<string, string>) });
+
+describe("dramatip delivery check", () => {
+  const origin = { Origin: "https://dramatip.net", Referer: "https://dramatip.net/" };
+
+  test("a 2xx is a stream, a 4xx is a refusal, the rest is no verdict", async () => {
+    expect(await checkDelivery("https://h/v.mp4", {}, answering(() => 206))).toBe("yes");
+    expect(await checkDelivery("https://h/v.mp4", {}, answering(() => 437))).toBe("no");
+    expect(await checkDelivery("https://h/v.mp4", {}, answering(() => 503))).toBe("unknown");
+    expect(
+      await checkDelivery("https://h/v.mp4", {}, async () => {
+        throw new Error("timeout");
+      }),
+    ).toBe("unknown");
+  });
+
+  test("a host that wants dramatip's Referer goes through the proxy", async () => {
+    const route = await routeFor("https://h/v.mp4", origin, answering((h) => (h.Referer ? 206 : 437)));
+    expect(route).toEqual({ via: "proxy", headers: origin });
+  });
+
+  test("a host that answers anyone is linked directly", async () => {
+    expect(await routeFor("https://h/v.mp4", origin, answering(() => 200))).toEqual({ via: "direct" });
+  });
+
+  test("a host that refuses either way is no source", async () => {
+    expect(await routeFor("https://h/v.mp4", origin, answering(() => 403))).toEqual({ via: "none" });
+  });
+
+  test("a slow host is given the benefit of the doubt", async () => {
+    expect(await routeFor("https://h/v.mp4", origin, answering(() => 504))).toEqual({ via: "direct" });
+  });
+});

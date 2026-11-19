@@ -66,7 +66,7 @@ export const dramatipRoutes = new Elysia({ prefix: "/dramatip" })
     answering(set, async () => {
       const page = readPage(query);
       const lang = readLang(query);
-      const key = `dramatip:home:${lang}:${page}`;
+      const key = `dramatip:v2:home:${lang}:${page}`;
       const cached = await Cache.get(key);
       if (cached) return JSON.parse(cached);
 
@@ -85,7 +85,7 @@ export const dramatipRoutes = new Elysia({ prefix: "/dramatip" })
       return answering(set, async () => {
         const page = readPage(query);
         const lang = readLang(query);
-        const key = `dramatip:search:${lang}:${q.toLowerCase()}:${page}`;
+        const key = `dramatip:v2:search:${lang}:${q.toLowerCase()}:${page}`;
         const cached = await Cache.get(key);
         if (cached) return JSON.parse(cached);
 
@@ -109,7 +109,7 @@ export const dramatipRoutes = new Elysia({ prefix: "/dramatip" })
   .get("/sources", ({ query, set }) =>
     answering(set, async () => {
       const lang = readLang(query);
-      const key = `dramatip:sources:${lang}`;
+      const key = `dramatip:v2:sources:${lang}`;
       const cached = await Cache.get(key);
       if (cached) return JSON.parse(cached);
 
@@ -125,7 +125,7 @@ export const dramatipRoutes = new Elysia({ prefix: "/dramatip" })
       answering(set, async () => {
         const page = readPage(query);
         const lang = readLang(query);
-        const key = `dramatip:source:${lang}:${app}:${page}`;
+        const key = `dramatip:v2:source:${lang}:${app}:${page}`;
         const cached = await Cache.get(key);
         if (cached) return JSON.parse(cached);
 
@@ -142,7 +142,7 @@ export const dramatipRoutes = new Elysia({ prefix: "/dramatip" })
     ({ params: { slug }, query, set, status }) =>
       answering(set, async () => {
         const lang = readLang(query);
-        const key = `dramatip:info:${lang}:${slug}`;
+        const key = `dramatip:v2:info:${lang}:${slug}`;
         // `?fresh=1` is the refresh job asking whether new episodes are out.
         const cached = query?.fresh === "1" ? null : await Cache.get(key);
         if (cached === MISS) return status(404, { message: "Series not found" });
@@ -169,7 +169,7 @@ export const dramatipRoutes = new Elysia({ prefix: "/dramatip" })
       return answering(set, async () => {
         const number = Math.max(1, parseInt(episode, 10));
         const lang = readLang(query);
-        const key = `dramatip:watch:${lang}:${slug}:${number}`;
+        const key = `dramatip:v2:watch:${lang}:${slug}:${number}`;
 
         // `?fresh=1` is the player saying the last link did not play.
         const cached = query?.fresh === "1" ? null : await Cache.get(key);

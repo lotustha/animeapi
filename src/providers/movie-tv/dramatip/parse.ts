@@ -37,11 +37,6 @@ export interface DramatipCard extends DramaCard {
   totalEpisodes: number | null;
 }
 
-/** A leaf text that is a badge, not a title. */
-function isBadge(text: string): boolean {
-  return /^EP\s*\d+$/i.test(text) || /^\d+(\.\d+)?$/.test(text);
-}
-
 /**
  * The site's image loader appends a width to every poster (`?w=3840`,
  * `@w=3840`). The bare URL is the original; a 3840px poster in a grid of
@@ -54,53 +49,36 @@ export function cleanPoster(url: string | undefined | null): string {
 /**
  * Every title card on a listing page (home, source, category, search).
  *
- * A card is an anchor to `/series/<slug>` holding a poster. The title is the
- * poster's `alt` on grid pages; search results leave `alt` empty and carry the
- * title as text, beside an "EP 55" badge, a rating and (on grids) a language
- * label. So: `alt`, else the longest text in the card that is not a badge.
+ * ONLY THE CARDS INSIDE AN `<article>`. Every page also carries a "trending"
+ * rail in its sidebar - the same handful of titles whatever the page is - as
+ * plain list links. Read along with the grid, the rail came back as the first
+ * results of every search: "mafia boss" and "billionaire" opened on the same
+ * six unrelated titles (2026-11-19, caught on the first live call).
+ *
+ * In a card the title is the poster's `alt`, and an "EP 55" badge gives the
+ * episode count.
  */
 export function parseCards(html: string): DramatipCard[] {
   const $ = cheerio.load(html);
   const bySlug = new Map<string, DramatipCard>();
 
-  $("a[href*='/series/']").each((_, el) => {
+  $("article a[href*='/series/']").each((_, el) => {
     const link = $(el);
     const match = (link.attr("href") || "").match(/\/series\/([a-z0-9][a-z0-9-]*)\/?$/i);
     if (!match || match[1] === "page") return;
     const slug = match[1];
+    const card = link.closest("article");
 
-    const img = link.find("img").first();
-    const leaves = link
-      .find("*")
-      .filter((_, n) => $(n).children().length === 0)
-      .map((_, n) => $(n).text().trim())
-      .get()
-      .filter(Boolean);
+    const img = card.find("img").first();
+    const title = (img.attr("alt") || card.find("h2,h3").first().text() || "").trim();
+    if (!title || bySlug.has(slug)) return;
 
-    const ep = leaves.map((t) => t.match(/^EP\s*(\d+)$/i)).find(Boolean);
-    const alt = (img.attr("alt") || "").trim();
-    const title =
-      alt ||
-      leaves
-        .filter((t) => !isBadge(t))
-        .sort((a, b) => b.length - a.length)[0] ||
-      "";
-    if (!title) return;
-
-    const poster = cleanPoster(img.attr("src") || img.attr("data-src"));
-    const known = bySlug.get(slug);
-    // The same title can be on a page twice (a rail and the grid). Keep the
-    // first, filled in from the second where the first was missing something.
-    if (known) {
-      if (!known.poster && poster) known.poster = poster;
-      if (known.totalEpisodes == null && ep) known.totalEpisodes = Number(ep[1]);
-      return;
-    }
+    const ep = card.text().match(/EP\s*(\d+)/i);
     bySlug.set(slug, {
       id: slug,
       title,
       url: `${DRAMATIP}/series/${slug}`,
-      poster,
+      poster: cleanPoster(img.attr("src") || img.attr("data-src")),
       totalEpisodes: ep ? Number(ep[1]) : null,
     });
   });

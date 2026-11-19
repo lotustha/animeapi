@@ -39,7 +39,7 @@ describe("locales", () => {
 });
 
 describe("parseCards", () => {
-  it("reads a grid page: title from the poster's alt", () => {
+  it("reads a grid page", () => {
     const cards = parseCards(fixture("cards-grid.html"));
     expect(cards).toHaveLength(4);
     expect(cards[0]).toMatchObject({
@@ -50,18 +50,21 @@ describe("parseCards", () => {
     expect(cards[0].poster).toMatch(/^https:\/\/.+\.jpg$/);
   });
 
-  // Search results leave `alt` empty. Read by alt alone, every search hit came
-  // back without a title and was dropped.
-  it("reads a search page: title from the card's text, not a badge", () => {
-    const cards = parseCards(fixture("cards-search.html"));
+  // Every page has a "trending" rail of list links beside the grid. Read with
+  // it, every search opened on the same six titles whatever was searched.
+  it("reads a search page's results, not the trending rail beside them", () => {
+    const html = fixture("cards-search.html");
+    expect(html).toContain("the-secret-girl-s-four-beast-players"); // the rail
+    const cards = parseCards(html);
     expect(cards).toHaveLength(4);
-    expect(cards[0].title).toBe("The Secret Girl's Four Beast Players");
-    expect(cards[0].totalEpisodes).toBe(55);
-    for (const c of cards) expect(c.title).not.toMatch(/^EP \d+$|^\d/);
+    for (const c of cards) expect(c.title).toMatch(/billionaire/i);
+    expect(cards.map((c) => c.id)).not.toContain(
+      "the-secret-girl-s-four-beast-players-31001956291",
+    );
   });
 
   it("is not fooled by the menu's own /series links", () => {
-    const html = '<a href="/series">Series</a><a href="/series/page/2">2</a>';
+    const html = '<article><a href="/series">Series</a><a href="/series/page/2">2</a></article>';
     expect(parseCards(html)).toEqual([]);
   });
 

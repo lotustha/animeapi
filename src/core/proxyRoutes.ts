@@ -1,6 +1,7 @@
 import { Elysia, t } from "elysia";
 import { SERVER_ORIGIN } from "./config.js";
 import { isTooLarge } from "./helper.js";
+import { ImageCache } from "./imageCache.js";
 import { Logger } from "./logger.js";
 import { isPlaylist, proxifyPlaylist } from "./playlist.js";
 
@@ -23,6 +24,11 @@ const segmentContentType = (upstream: string | null, firstByte: number | undefin
 import { env } from "./runtime.js";
 
 if (!SERVER_ORIGIN && env.NODE_ENV !== "test") throw new Error("set SERVER_ORIGIN at .env!");
+
+// Pictures fetched through /proxy/fetch, kept so the next viewer does not
+// wait for the origin again. See imageCache.ts.
+const images = new ImageCache();
+const IMAGE_MAX_AGE = "public, max-age=604800";
 
 export const proxyRoutes = new Elysia({ prefix: "/proxy" })
 
@@ -337,6 +343,22 @@ export const proxyRoutes = new Elysia({ prefix: "/proxy" })
         }
       }
 
+      // A picture asked for plainly (no headers of the caller's own) is the
+      // same bytes for everyone, and is answered from memory when held.
+      const cacheKey = headers ? null : url;
+      const held = cacheKey ? images.get(cacheKey) : null;
+      if (held) {
+        return new Response(held.body as BodyInit, {
+          headers: {
+            "content-type": held.type,
+            "content-length": String(held.body.byteLength),
+            "cache-control": IMAGE_MAX_AGE,
+            "access-control-allow-origin": "*",
+            "x-proxy-cache": "hit",
+          },
+        });
+      }
+
       customHeaders["Connection"] = "keep-alive";
 
       try {
@@ -348,6 +370,25 @@ export const proxyRoutes = new Elysia({ prefix: "/proxy" })
         // Size limit check
         if (isTooLarge(res.headers.get("content-length"), MAX_FETCH_SIZE)) {
           return new Response("Payload too large", { status: 413 });
+        }
+
+        // An image is read whole, kept if it is small, and sent with a
+        // lifetime so the app's own cache keeps it too. One that declares a
+        // size over the limit is streamed as before, never buffered.
+        const declared = Number(res.headers.get("content-length")) || 1;
+        const type = res.headers.get("content-type");
+        if (cacheKey && res.status === 200 && images.accepts(type, declared)) {
+          const body = new Uint8Array(await res.arrayBuffer());
+          images.set(cacheKey, body, type as string);
+          return new Response(body as BodyInit, {
+            headers: {
+              "content-type": type as string,
+              "content-length": String(body.byteLength),
+              "cache-control": IMAGE_MAX_AGE,
+              "access-control-allow-origin": "*",
+              "x-proxy-cache": "miss",
+            },
+          });
         }
 
         // Subtitle sidecars are proxied through here (the video's Referer-gated

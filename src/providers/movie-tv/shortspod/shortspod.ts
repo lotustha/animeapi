@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { Logger } from "../../../core/logger.js";
+import { proxifySource } from "../../../core/proxy.js";
 import { shortspod } from "../../origins.js";
 import type {
   DramaCard,
@@ -288,15 +289,19 @@ export class ShortsPod {
 
       const directUrl: string = ep.src;
 
-      // Build the proxied URL through our API proxy
-      const proxiedUrl = `/api/proxy/stream?url=${encodeURIComponent(directUrl)}&referer=${encodeURIComponent(shortspod + "/")}`;
+      // ShortsPod's CDN began refusing any request without its own Referer
+      // (2026-11-21: 403 for the app and the website alike), so the file can
+      // only be played through our proxy, which sends that header. The old
+      // "/api/proxy/stream" path here never existed on any server.
+      const proxiedUrl = proxifySource(directUrl, { Referer: shortspod + "/" });
 
       const source: DramaSource = {
         url: proxiedUrl,
         quality: "default",
         isM3U8: false,
         proxied: true,
-        directUrl,
+        // Empty on purpose: clients try directUrl first, and it is a sure 403.
+        directUrl: "",
       };
 
       return {

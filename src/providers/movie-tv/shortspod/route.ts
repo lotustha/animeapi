@@ -80,7 +80,7 @@ export const shortspodRoutes = new Elysia({ prefix: "/shortspod" })
         return status(400, { message: "Episode must be a positive integer" });
       }
       const number = Math.max(1, parseInt(episode, 10));
-      const key = `shortspod:watch:${id}:${number}`;
+      const key = `shortspod:v2:watch:${id}:${number}`;
 
       const cached = await Cache.get(key);
       if (cached === MISS) return status(404, { message: "No sources found for this episode" });

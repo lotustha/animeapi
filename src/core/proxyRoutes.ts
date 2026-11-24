@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
 import { SERVER_ORIGIN } from "./config.js";
-import { isTooLarge } from "./helper.js";
+import { imageRefererFor, isTooLarge } from "./helper.js";
 import { ImageCache } from "./imageCache.js";
 import { Logger } from "./logger.js";
 import { isPlaylist, proxifyPlaylist } from "./playlist.js";
@@ -357,6 +357,13 @@ export const proxyRoutes = new Elysia({ prefix: "/proxy" })
             "x-proxy-cache": "hit",
           },
         });
+      }
+
+      // Referer-gated image CDNs (e.g. MangaPill's) get their site's Referer
+      // unless the caller chose one, so plain `?url=` requests work and cache.
+      const referer = imageRefererFor(url);
+      if (referer && !Object.keys(customHeaders).some((k) => k.toLowerCase() === "referer")) {
+        customHeaders["Referer"] = referer;
       }
 
       customHeaders["Connection"] = "keep-alive";

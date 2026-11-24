@@ -68,3 +68,13 @@ export const tidal = "https://api.tidal.com/v1";
 // client creates with POST /signUp; videos on cdn-moj-g need no auth.
 export const moj = "https://mojapp.in";
 export const moj_api = "https://moj-apis.sharechat.com";
+// MangaPill: plain server-rendered HTML, no Cloudflare challenge. Its image CDN
+// 403s without a mangapill Referer; /proxy/fetch adds it via IMAGE_REFERERS.
+export const mangapill = "https://mangapill.com";
+
+// Image CDNs that refuse requests without the owning site's Referer. /proxy/fetch
+// adds the Referer for these hosts (and their subdomains) when the caller sends
+// none, so a plain `/proxy/fetch?url=` works and still lands in the image cache.
+export const IMAGE_REFERERS: Record<string, string> = {
+  "readdetectiveconan.com": `${mangapill}/`,
+};

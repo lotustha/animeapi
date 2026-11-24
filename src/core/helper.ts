@@ -1,5 +1,24 @@
+import { IMAGE_REFERERS } from "../providers/origins.js";
+
 export const isTooLarge = (contentLength: string | null, limit: number) => {
   return contentLength && parseInt(contentLength, 10) > limit;
+};
+
+/**
+ * The Referer a Referer-gated image CDN needs (see IMAGE_REFERERS), matched on
+ * the URL's host or any subdomain of a listed host. null when none applies.
+ */
+export const imageRefererFor = (url: string): string | null => {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  for (const [domain, referer] of Object.entries(IMAGE_REFERERS)) {
+    if (host === domain || host.endsWith(`.${domain}`)) return referer;
+  }
+  return null;
 };
 
 const rawLanguageCodes = {

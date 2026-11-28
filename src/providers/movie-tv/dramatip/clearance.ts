@@ -9,7 +9,8 @@ import { Logger } from "../../../core/logger.js";
  * a plain fetch from the same IP is let through, for some time.
  *
  * So: FlareSolverr (a headless Chrome, docker on the VPS, localhost:8191)
- * solves the challenge once; we keep its cookie and UA in memory and send them
+ * solves the challenge once (on an HTML page: a text file runs no challenge
+ * script, so it earns no cookie); we keep its cookie and UA in memory and send them
  * with every dramatip request. A challenged answer gets a new clearance (one
  * at a time) and one retry.
  */
@@ -41,7 +42,7 @@ async function solve(origin: string): Promise<Clearance | null> {
     const res = await fetch(SOLVER_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cmd: "request.get", url: `${origin}/robots.txt`, maxTimeout: SOLVE_TIMEOUT_MS - 5_000 }),
+      body: JSON.stringify({ cmd: "request.get", url: `${origin}/`, maxTimeout: SOLVE_TIMEOUT_MS - 5_000 }),
       signal: AbortSignal.timeout(SOLVE_TIMEOUT_MS),
     });
     const body = (await res.json()) as {

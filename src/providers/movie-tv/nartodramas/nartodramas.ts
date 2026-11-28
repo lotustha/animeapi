@@ -68,6 +68,13 @@ async function getJson(path: string): Promise<{ status: number; body: any }> {
     throw new NartodramasBusy(`${(err as Error).name} ${path}`);
   }
   if (res.status === 429 || res.status >= 500) throw new NartodramasBusy(`${res.status} ${path}`);
+  // Vercel's firewall challenging us (x-vercel-mitigated: challenge, 403):
+  // we asked too fast. Busy, so every caller backs off rather than retrying.
+  // The first sync run tripped it at ~66 calls in two minutes (2026-11-28).
+  if (res.status === 403 && res.headers.get("x-vercel-mitigated")) {
+    await res.body?.cancel();
+    throw new NartodramasBusy(`challenged ${path}`);
+  }
   if (res.status === 404) return { status: 404, body: null };
   if (!res.ok) throw new Error(`nartodramas ${res.status}: ${path}`);
   return { status: res.status, body: await res.json() };
@@ -197,24 +204,42 @@ export class Nartodramas {
     return { ...loose, results: loose.results.filter((c) => titleHasAll(c.title, q)) };
   }
 
+  /**
+   * One title's detail, which carries EVERY episode's link. Kept in memory
+   * for a while so that info and each episode of the same title cost the
+   * site one request, not one each: the site's firewall challenges us when
+   * we ask too fast (see getJson).
+   */
+  private static details = new Map<string, { at: number; body: any | null }>();
+  private static readonly DETAIL_TTL_MS = 30 * 60_000;
+
+  private static async detail(slug: string): Promise<any | null> {
+    const hit = this.details.get(slug);
+    if (hit && Date.now() - hit.at < this.DETAIL_TTL_MS) return hit.body;
+    const { status, body } = await getJson(`/api/dramas?slug=${encodeURIComponent(slug)}`);
+    const kept = status === 404 ? null : body;
+    if (this.details.size > 2000) this.details.clear();
+    this.details.set(slug, { at: Date.now(), body: kept });
+    return kept;
+  }
+
   static async info(slug: string): Promise<DramaInfo | null> {
     if (!SLUG.test(slug)) return null;
-    const { status, body } = await getJson(`/api/dramas?slug=${encodeURIComponent(slug)}`);
-    return status === 404 ? null : parseInfo(body);
+    const body = await this.detail(slug);
+    return body ? parseInfo(body) : null;
   }
 
   /**
-   * One episode. [check] fetches the file's first bytes before answering, for
-   * the import gate: only a link that delivers now lets a title in.
+   * One episode, from the title's detail. [check] fetches the file's first
+   * bytes before answering, for the import gate: only a link that delivers
+   * now lets a title in.
    */
   static async watch(slug: string, episode: number, check = false): Promise<DramaStream | null> {
     if (!SLUG.test(slug)) return null;
-    const { status, body } = await getJson(
-      `/api/dramas?slug=${encodeURIComponent(slug)}&episode=${episode}`,
-    );
-    if (status === 404) return null;
-    const [ep] = playableEpisodes(body?.episode ? [body.episode] : []);
-    if (!ep || ep.number !== episode) return null;
+    const body = await this.detail(slug);
+    if (!body) return null;
+    const ep = playableEpisodes(body?.item?.episodes).find((e) => e.number === episode);
+    if (!ep) return null;
     if (check && !(await delivers(ep.url))) return null;
 
     const isM3U8 = /\.m3u8(\?|$)/i.test(ep.url);

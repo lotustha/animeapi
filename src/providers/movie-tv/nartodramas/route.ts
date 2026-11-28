@@ -65,10 +65,10 @@ export const nartodramasRoutes = new Elysia({ prefix: "/nartodramas" })
       if (!q) return status(400, { message: "Missing search key" });
       return answering(set, async () => {
         const page = readPage(query);
-        const key = `nartodramas:v1:search:${q.toLowerCase()}:${page}`;
+        const key = `nartodramas:v2:search:${q.toLowerCase()}:${page}`;
         const cached = await Cache.get(key);
         if (cached) return JSON.parse(cached);
-        const results = await singleFlight(key, () => Nartodramas.list(page, q));
+        const results = await singleFlight(key, () => Nartodramas.search(q, page));
         Cache.set(key, JSON.stringify(results), results.results.length > 0 ? SEARCH_TTL : MISS_TTL);
         return results;
       });

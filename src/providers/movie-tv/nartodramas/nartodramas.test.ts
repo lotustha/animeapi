@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseCard, parseInfo, parseList } from "./nartodramas.js";
+import { parseCard, parseInfo, parseList, titleHasAll } from "./nartodramas.js";
 
 const fixture = (name: string) => JSON.parse(readFileSync(join(import.meta.dir, "fixtures", name), "utf8"));
 
@@ -31,5 +31,13 @@ describe("nartodramas parsing", () => {
   it("is null for a title with nothing to play", () => {
     expect(parseInfo({ item: { slug: "x", title: "X", episodes: [{ episode_number: 1, video_url: "", available: true }] } })).toBeNull();
     expect(parseInfo({ error: "Not found" })).toBeNull();
+  });
+});
+
+describe("loose search matching", () => {
+  it("matches every query word past punctuation and case", () => {
+    expect(titleHasAll("F Rank Awakening: Zero to Superhero", "F-Rank Awakening Zero to Superhero")).toBe(true);
+    expect(titleHasAll("The CEO’s Bride", "ceos bride")).toBe(true);
+    expect(titleHasAll("F Rank Awakening: He Who Commands", "F-Rank Awakening Zero")).toBe(false);
   });
 });

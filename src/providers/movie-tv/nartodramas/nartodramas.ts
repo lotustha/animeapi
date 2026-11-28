@@ -158,12 +158,43 @@ async function delivers(url: string): Promise<boolean> {
   }
 }
 
+/** Lower case, letters and digits only, one space between words. */
+export function words(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[‘’']/g, "")
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+}
+
+/** Whether every word of [query] is a word of [title]. */
+export function titleHasAll(title: string, query: string): boolean {
+  const have = new Set(words(title));
+  return words(query).every((w) => have.has(w));
+}
+
 export class Nartodramas {
   static async list(page = 1, q = ""): Promise<Paginated<NartodramasCard>> {
     const params = new URLSearchParams({ page: String(page) });
     if (q) params.set("q", q);
     const { body } = await getJson(`/api/dramas?${params}`);
     return parseList(body, page);
+  }
+
+  /**
+   * Search. The site matches the query as one literal string against the
+   * raw title, so punctuation in the title defeats a full one: "F Rank
+   * Awakening Zero to Superhero" finds nothing, the title having a colon
+   * after "Awakening" (2026-11-28). When the whole query finds nothing, its
+   * first two words are asked instead and only titles holding EVERY word of
+   * the query are kept.
+   */
+  static async search(q: string, page = 1): Promise<Paginated<NartodramasCard>> {
+    const whole = await this.list(page, q);
+    const ws = words(q);
+    if (whole.results.length > 0 || ws.length < 3) return whole;
+    const loose = await this.list(page, ws.slice(0, 2).join(" "));
+    return { ...loose, results: loose.results.filter((c) => titleHasAll(c.title, q)) };
   }
 
   static async info(slug: string): Promise<DramaInfo | null> {

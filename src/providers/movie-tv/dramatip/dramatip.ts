@@ -24,9 +24,7 @@ import {
   type DramatipCard,
 } from "./parse.js";
 import { choose, mightPlay } from "./playback.js";
-
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+import { dramatipFetch } from "./clearance.js";
 
 const EMPTY_PAGE: Paginated<DramatipCard> = { currentPage: 1, hasNextPage: false, results: [] };
 
@@ -44,7 +42,8 @@ export class DramatipBusy extends Error {
 /**
  * DramaTip (dramatip.net): an aggregator of ~87 short-drama apps.
  *
- * Next.js behind Cloudflare, server-rendered, no challenge and no cookies.
+ * Next.js behind Cloudflare, server-rendered. Since 2026-11-21 Cloudflare
+ * challenges every path; dramatipFetch (clearance.ts) carries the pass.
  * Listings and detail are HTML (see parse.ts). The one JSON endpoint is the
  * stream API, which wants a dramatip Referer and answers with encrypted blobs
  * (crypto.ts). How each app's stream is delivered differs (playback.ts).
@@ -53,8 +52,8 @@ export class Dramatip {
   // ─── Fetching ──────────────────────────────────────────────────────────────
 
   private static async fetchText(url: string, accept: string): Promise<string> {
-    const res = await fetch(url, {
-      headers: { "User-Agent": UA, Accept: accept, Referer: `${DRAMATIP}/` },
+    const res = await dramatipFetch(url, {
+      headers: { Accept: accept, Referer: `${DRAMATIP}/` },
       signal: AbortSignal.timeout(PAGE_TIMEOUT_MS),
     });
     if (res.status === 429 || res.status >= 500) throw new DramatipBusy(`${res.status} ${url}`);
@@ -202,8 +201,8 @@ export class Dramatip {
     const locale = siteLocale(lang);
     if (!locale) return null;
 
-    const res = await fetch(DRAMATIP + localePath(locale, `/series/${slug}`), {
-      headers: { "User-Agent": UA, Accept: "text/html", Referer: `${DRAMATIP}/` },
+    const res = await dramatipFetch(DRAMATIP + localePath(locale, `/series/${slug}`), {
+      headers: { Accept: "text/html", Referer: `${DRAMATIP}/` },
       signal: AbortSignal.timeout(PAGE_TIMEOUT_MS),
     });
     if (res.status === 404) return null;
@@ -237,9 +236,8 @@ export class Dramatip {
     locale: string,
   ): Promise<Descriptor | null> {
     const url = `${DRAMATIP}/api/episode-source/${encodeURIComponent(slug)}/${episode}?lang=${locale}`;
-    const res = await fetch(url, {
+    const res = await dramatipFetch(url, {
       headers: {
-        "User-Agent": UA,
         Accept: "application/json",
         // Without a dramatip Referer this endpoint answers 403 "forbidden".
         Referer: `${DRAMATIP}${localePath(locale, `/series/${slug}/episode-${episode}`)}`,

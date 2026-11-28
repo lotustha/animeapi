@@ -1,0 +1,51 @@
+{
+ "item": {
+  "id": 6537,
+  "title": "The Bride's Deadly Rematch",
+  "slug": "the-bride-s-deadly-rematch",
+  "provider": "ShortPeak",
+  "description": "She died a bride betrayed — pushed to the edge by her fiancé Ryan and his mistress, Chloe. But death wasn’t the end. Lily wakes up one month before her wedding, with every memory intact and nothing left to lose. While they plot to take everything from her, she trains in secret and gathers proof they’ll never see coming. This time, when the cage door closes, Lily is the one who walks out standing.",
+  "poster_url": "https://media.shortpeak.biz/cdn-cgi/image/width=640,quality=78,format=auto,fit=scale-down/https://media.shortpeak.biz/covers/d7c7a92e-7ed2-4c9b-901d-ed475bb3b63e.png",
+  "poster_fallback_urls": [
+   "https://media.shortpeak.biz/cdn-cgi/image/width=640,quality=78,format=auto,fit=scale-down/https://media.shortpeak.biz/covers/d7c7a92e-7ed2-4c9b-901d-ed475bb3b63e.png"
+  ],
+  "tags": [
+   "Revenge",
+   "Strong"
+  ],
+  "status": "published",
+  "owner_id": "admin",
+  "created_at": 1794912150180,
+  "updated_at": 1794912150180,
+  "episodes": [
+   {
+    "episode_number": 1,
+    "title": "Episode 1",
+    "video_url": "https://cdn.narto-drama.com/nd3/1193298/37100481/ep1-cb3d9814.mp4",
+    "subtitle_url": "",
+    "available": true
+   },
+   {
+    "episode_number": 2,
+    "title": "Episode 2",
+    "video_url": "https://cdn.narto-drama.com/nd3/1193298/37100482/ep2-94470cb7.mp4",
+    "subtitle_url": "",
+    "available": true
+   },
+   {
+    "episode_number": 3,
+    "title": "Episode 3",
+    "video_url": "https://cdn.narto-drama.com/nd3/1193298/37100483/ep3-aaebece3.mp4",
+    "subtitle_url": "",
+    "available": true
+   },
+   {
+    "episode_number": 4,
+    "title": "Episode 4",
+    "video_url": "https://cdn.narto-drama.com/nd3/1193298/37100484/ep4-228f65a2.mp4",
+    "subtitle_url": "",
+    "available": false
+   }
+  ]
+ }
+}

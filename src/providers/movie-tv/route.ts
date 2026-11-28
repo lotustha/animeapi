@@ -6,6 +6,7 @@ import { flixhqRoutes } from "./flixhq/route.js";
 import { nartoDramaRoutes } from "./nartodrama/route.js";
 import { shortspodRoutes } from "./shortspod/route.js";
 import { dramatipRoutes } from "./dramatip/route.js";
+import { nartodramasRoutes } from "./nartodramas/route.js";
 import { movieBoxRoutes } from "./moviebox/route.js";
 
 export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
@@ -16,6 +17,7 @@ export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
   .use(nartoDramaRoutes)
   .use(shortspodRoutes)
   .use(dramatipRoutes)
+  .use(nartodramasRoutes)
   .use(movieBoxRoutes)
 
   // ─── Overview Endpoint ────────────────────────────────────────────────────────
@@ -24,7 +26,7 @@ export const movieTvRoutes = new Elysia({ prefix: "/movie-tv" })
     () => ({
       service: "movie-tv",
       description: "Unified Movie & TV API — provider-isolated route architecture",
-      providers: ["primesrc", "yflix", "himovies", "flixhq", "nartodrama", "shortspod", "dramatip", "moviebox"],
+      providers: ["primesrc", "yflix", "himovies", "flixhq", "nartodrama", "shortspod", "dramatip", "nartodramas", "moviebox"],
       endpoints: {
         primesrc: [
           "GET /movie-tv/primesrc/movie/:tmdbid   → Get movie sources",

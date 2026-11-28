@@ -13,7 +13,7 @@ import {
   siteLocale,
   type Descriptor,
 } from "./parse.js";
-import { choose, mightPlay, verdictFor, viaMediaProxy } from "./playback.js";
+import { choose, chooseAll, mightPlay, verdictFor, viaMediaProxy } from "./playback.js";
 
 // Pages and API answers saved from dramatip.net on 2026-11-19, cut down to the
 // parts these functions read.
@@ -162,6 +162,20 @@ describe("choosing a source", () => {
 
   // DramaBox lists its signed, content-encrypted MP4 first and a plain HLS
   // mirror second. Taking the first entry returns a file no player can open.
+  // A plain mp4 whose host refuses must not be the end of it: every playable
+  // entry is offered, in order, and the caller tries the next (2026-11-28).
+  it("offers every playable entry in order, not only the first", () => {
+    const chain = [
+      { type: "mp4", enc: "a" },
+      { type: "storyreel", enc: "b" },
+      { type: "hls", enc: "c" },
+    ];
+    const urls: Record<string, string> = { a: "https://pl.example/1.mp4", b: "https://x/2", c: "https://h/3.m3u8" };
+    const { picks, why } = chooseAll(chain as never, (e) => urls[e]);
+    expect(picks.map((p) => p.entry.type)).toEqual(["mp4", "hls"]);
+    expect(why).toEqual(["type storyreel"]);
+  });
+
   it("DramaBox: skips the encrypted mp4 for the HLS mirror", () => {
     const picked = choose(descriptor("api-dramabox.json").chain, open);
     if (picked.ok === false) throw new Error("expected a source");

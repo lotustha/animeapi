@@ -23,7 +23,8 @@ import {
   type Descriptor,
   type DramatipCard,
 } from "./parse.js";
-import { choose, mightPlay } from "./playback.js";
+import { chooseAll, mightPlay, type Playable } from "./playback.js";
+import type { ChainEntry } from "./parse.js";
 import { dramatipFetch } from "./clearance.js";
 
 const EMPTY_PAGE: Paginated<DramatipCard> = { currentPage: 1, hasNextPage: false, results: [] };
@@ -256,6 +257,42 @@ export class Dramatip {
    * `refresh` in the answer says the link is short-lived (signed, or a session
    * the app must renew), so the route caches it briefly.
    */
+  /**
+   * A LINK IS NOT A STREAM UNTIL IT HAS BEEN FETCHED (see delivers.ts).
+   *
+   * false: the host refused. Otherwise what our proxy must send for the host
+   * to answer (undefined: nothing); when that is set there is no link a player
+   * could open by itself, so `directUrl` stays empty and the stream goes
+   * through the proxy.
+   */
+  private static async deliverable(
+    play: Playable,
+    origin: Record<string, string>,
+    slug: string,
+    episode: number,
+  ): Promise<Record<string, string> | undefined | false> {
+    if (play.how === "origin-proxy") {
+      // The media proxy answers only dramatip's origin - when it answers.
+      if ((await checkDelivery(play.url, origin)) === "no") {
+        inc("dramatip.refused.origin_proxy");
+        Logger.warn(`dramatip: media proxy refused ${slug} ep ${episode}`);
+        return false;
+      }
+      return origin;
+    }
+    const route = await routeFor(play.url, origin);
+    if (route.via === "none") {
+      inc("dramatip.refused.direct");
+      Logger.warn(`dramatip: ${new URL(play.url).host} refused ${slug} ep ${episode}`);
+      return false;
+    }
+    if (route.via === "proxy") {
+      inc("dramatip.needs_referer");
+      return route.headers;
+    }
+    return undefined;
+  }
+
   static async watch(
     slug: string,
     episode: number,
@@ -266,49 +303,33 @@ export class Dramatip {
     // `{"descriptor":null}` with a 200 is how a missing episode is answered.
     if (!descriptor?.chain?.length) return null;
 
-    let picked = choose(descriptor.chain, (enc) => decrypt(enc, this.key));
+    let picked = chooseAll(descriptor.chain, (enc) => decrypt(enc, this.key));
     // Nothing decrypted at all: that is a rotated key, not an unplayable
     // episode. Read the key again and try once more.
-    if (picked.ok === false && picked.why.every((w) => w.includes("undecryptable"))) {
+    if (picked.picks.length === 0 && picked.why.every((w) => w.includes("undecryptable"))) {
       inc("dramatip.decrypt_failed");
       if (await this.refreshKey()) {
-        picked = choose(descriptor.chain, (enc) => decrypt(enc, this.key));
+        picked = chooseAll(descriptor.chain, (enc) => decrypt(enc, this.key));
       }
     }
-    if (picked.ok === false) {
+    if (picked.picks.length === 0) {
       for (const why of picked.why) inc(`dramatip.unsupported.${why.replace(/[^a-z0-9]+/gi, "_")}`);
       Logger.warn(`dramatip: no playable source for ${slug} ep ${episode} (${picked.why.join(", ")})`);
       return null;
     }
 
-    const { entry, play } = picked;
     const origin = { Origin: DRAMATIP, Referer: `${DRAMATIP}/` };
 
-    // A LINK IS NOT A STREAM UNTIL IT HAS BEEN FETCHED (see delivers.ts).
-    // `sendWith` is what our proxy must send for the host to answer; when it
-    // is set there is no link a player could open by itself, so `directUrl`
-    // stays empty and the stream goes through the proxy.
-    let sendWith: Record<string, string> | undefined;
-    if (play.how === "origin-proxy") {
-      // The media proxy answers only dramatip's origin - when it answers.
-      if ((await checkDelivery(play.url, origin)) === "no") {
-        inc("dramatip.refused.origin_proxy");
-        Logger.warn(`dramatip: media proxy refused ${slug} ep ${episode}`);
-        return null;
-      }
-      sendWith = origin;
-    } else {
-      const route = await routeFor(play.url, origin);
-      if (route.via === "none") {
-        inc("dramatip.refused.direct");
-        Logger.warn(`dramatip: ${new URL(play.url).host} refused ${slug} ep ${episode}`);
-        return null;
-      }
-      if (route.via === "proxy") {
-        inc("dramatip.needs_referer");
-        sendWith = route.headers;
-      }
+    // The first entry whose host delivers; the next is tried when one refuses.
+    let chosen: { entry: ChainEntry; play: Playable; sendWith?: Record<string, string> } | null = null;
+    for (const candidate of picked.picks) {
+      const sendWith = await this.deliverable(candidate.play, origin, slug, episode);
+      if (sendWith === false) continue;
+      chosen = { ...candidate, sendWith };
+      break;
     }
+    if (!chosen) return null;
+    const { entry, play, sendWith } = chosen;
 
     const sourceFor = (url: string, quality: string): DramaSource => ({
       url: proxifySource(url, sendWith, play.isM3U8),

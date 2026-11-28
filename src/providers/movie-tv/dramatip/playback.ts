@@ -64,6 +64,23 @@ export function choose(
   chain: ChainEntry[] | undefined,
   open: (enc: string) => string,
 ): { ok: true; entry: ChainEntry; play: Playable } | { ok: false; why: string[] } {
+  const { picks, why } = chooseAll(chain, open);
+  return picks.length > 0 ? { ok: true, ...picks[0] } : { ok: false, why };
+}
+
+/**
+ * Every entry of [chain] we could play, in dramatip's own order.
+ *
+ * The first is not always the one that delivers: DramaBox titles list an mp4
+ * on pl.shortdizilab.com first and an HLS mirror after it, and that host
+ * refuses some titles outright ("F-Rank Awakening: Zero to Superhero",
+ * 2026-11-28). The caller tries them in turn.
+ */
+export function chooseAll(
+  chain: ChainEntry[] | undefined,
+  open: (enc: string) => string,
+): { picks: { entry: ChainEntry; play: Playable }[]; why: string[] } {
+  const picks: { entry: ChainEntry; play: Playable }[] = [];
   const why: string[] = [];
   for (const entry of chain ?? []) {
     if (!entry?.enc) {
@@ -78,10 +95,11 @@ export function choose(
       continue;
     }
     const verdict = verdictFor(entry.type, url);
-    if (verdict.how !== "unsupported") return { ok: true, entry, play: verdict };
-    why.push(verdict.why);
+    if (verdict.how !== "unsupported") picks.push({ entry, play: verdict });
+    else why.push(verdict.why);
   }
-  return { ok: false, why: why.length > 0 ? why : ["empty chain"] };
+  if (picks.length === 0 && why.length === 0) why.push("empty chain");
+  return { picks, why };
 }
 
 /**
